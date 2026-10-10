@@ -309,12 +309,13 @@ function inp(label,path,o={}){const v=getPath(cur,path)??'';
   return `<label class="f"><span>${esc(label)}${o.u?` <span class="u">(${o.u})</span>`:''}</span><input class="${o.txt?'':'n'}" ${o.type?`type="${o.type}"`:'type="text"'} ${o.txt?'':'inputmode="decimal"'} id="in-${path.replace(/\./g,'-')}" data-k="${path}" value="${esc(v)}" ${o.list?`list="${o.list}"`:''} ${o.ph?`placeholder="${esc(o.ph)}"`:''} ${o.dis?'disabled':''}></label>`}
 
 /* ---------- Estado de la operación ---------- */
-function blankSide(){return {lv:['','',''],fwl:'0',ref:'',tv:['','',''],amb:'',api:'',bsw:''}}
-function demoOp(){return {id:'',rev:0,fecha:today(),orden:'DSP-0001',tankId:'DEMO',product:'Petróleo crudo',sameQ:true,fra:'0',tol:'0.5',bswMode:'open',note:'',
-  open:{lv:['10550','10550','10550'],fwl:'0',ref:'14145',tv:['177.2','178.7','179.2'],amb:'',api:'13.8',bsw:'0.416'},
-  close:{lv:['9853','9853','9853'],fwl:'0',ref:'14145',tv:['177.0','177.9','178.4'],amb:'',api:'13.8',bsw:'0.416'},
+function blankSide(){return {lv:['','',''],fwl:'0',ref:'',tv:['','',''],amb:'',api:''}}
+function demoOp(){return {id:'',rev:0,fecha:today(),orden:'DSP-0001',tankId:'DEMO',product:'Petróleo crudo',sameQ:true,fra:'0',tol:'0.5',bsw:'0.416',note:'',
+  open:{lv:['10550','10550','10550'],fwl:'0',ref:'14145',tv:['177.2','178.7','179.2'],amb:'',api:'13.8'},
+  close:{lv:['9853','9853','9853'],fwl:'0',ref:'14145',tv:['177.0','177.9','178.4'],amb:'',api:'13.8'},
   veh:DEMO_VEH.map(v=>({key:v.key,vol:String(v.loads[0].vol),max:String(v.maxGov)})),demo:true}}
-function newOp(){return {id:'',rev:0,fecha:today(),orden:'',tankId:'',product:'',sameQ:true,fra:'0',tol:'0.5',bswMode:'open',note:'',open:blankSide(),close:blankSide(),veh:[{key:'',vol:'',max:''}]}}
+const fixBsw=c=>{if(c.bsw===undefined||c.bsw==='')c.bsw=c.open?.bsw||c.close?.bsw||'';return c};
+function newOp(){return {id:'',rev:0,fecha:today(),orden:'',tankId:'',product:'',sameQ:true,fra:'0',tol:'0.5',bsw:'',note:'',open:blankSide(),close:blankSide(),veh:[{key:'',vol:'',max:''}]}}
 let cur=demoOp(), tab='despacho', calc=null;
 
 /* ---------- Pestañas ---------- */
@@ -330,8 +331,8 @@ function sideForm(k,title){const P=k+'.';const q=k==='close'&&cur.sameQ;
   <div><div class="tri">${[0,1,2].map(i=>inp('Nivel producto '+(i+1)+(i===2?' (si 1 y 2 difieren)':''),P+'lv.'+i,{u:'mm'})).join('')}</div><div class="derived" id="d-${k}-lv"></div></div>
   <div class="grid">${inp('Nivel agua libre (FWL)',P+'fwl',{u:'mm'})}${inp('Altura referencia observada',P+'ref',{u:'mm'})}${inp('Temp. ambiente (opcional)',P+'amb',{u:'°F'})}</div>
   <div><div class="tri">${[0,1,2].map(i=>inp('Temp. líquido '+(i+1),P+'tv.'+i,{u:'°F'})).join('')}</div><div class="derived" id="d-${k}-tv"></div></div>
-  <div class="grid">${inp('Gravedad API a 60 °F',P+'api',{u:'°API',dis:q})}${inp('% BSW (S&W)',P+'bsw',{u:'%',dis:q})}</div>
-  ${k==='close'?`<label class="f" style="flex-direction:row;gap:8px;align-items:center"><input type="checkbox" id="sameQ" ${cur.sameQ?'checked':''} style="width:auto"> Usar la calidad (API y BSW) de la apertura</label>`:''}
+  <div class="grid">${inp('Gravedad API a 60 °F',P+'api',{u:'°API',dis:q})}</div>
+  ${k==='close'?`<label class="f" style="flex-direction:row;gap:8px;align-items:center"><input type="checkbox" id="sameQ" ${cur.sameQ?'checked':''} style="width:auto"> Usar el API de la apertura</label>`:''}
   </section>`}
 function vehRow(v,i){return `<tr data-i="${i}"><td class="t">${i+1}</td>
  <td class="t"><input class="txt" list="vehlist" data-vk="key" value="${esc(v.key)}" placeholder="Cabezote/Remolque" aria-label="Binomio ${i+1}" style="min-width:150px"></td>
@@ -345,7 +346,7 @@ function viewDespacho(){confirmAl=false;
    <button class="b" id="bNew">Nueva operación</button><button class="b p" id="bSave" ${S.canWrite?'':'disabled'}>Guardar operación</button></div>
    <div class="grid">${inp('N.º de orden / despacho','orden',{txt:1})}${inp('Fecha','fecha',{txt:1,type:'date'})}
     <label class="f">Tanque (tabla de aforo)<select id="selTank" data-k="tankId"><option value="">— elegir —</option>${tankOpts()}</select></label>
-    ${inp('Producto','product',{txt:1,list:'prodlist'})}${inp('Ajuste techo flotante FRA','fra',{u:'bbl'})}${inp('Tolerancia programado vs bache','tol',{u:'%'})}<label class="f"><span>%BSW aplicado al despacho</span><select id="selBsw" data-k="bswMode"><option value="open" ${(cur.bswMode||'open')==='open'?'selected':''}>Apertura (muestra del producto despachado)</option><option value="close" ${cur.bswMode==='close'?'selected':''}>Cierre</option><option value="avg" ${cur.bswMode==='avg'?'selected':''}>Promedio apertura y cierre</option></select></label></div>
+    ${inp('Producto','product',{txt:1,list:'prodlist'})}${inp('Ajuste techo flotante FRA','fra',{u:'bbl'})}${inp('Tolerancia programado vs bache','tol',{u:'%'})}${inp('% BSW (S&W) de la operación','bsw',{u:'%'})}</div>
    <div class="row"><button class="b s" id="bSaveProd">Guardar producto en la biblioteca</button><span class="note">Las medidas se ingresan en milímetros y los volúmenes salen en barriles (bbl) a 60 °F.</span></div>
    <datalist id="prodlist">${Object.values(S.cache.products).map(p=>`<option value="${esc(p.name)}">`).join('')}</datalist>
    <datalist id="vehlist">${Object.values(S.cache.vehicles).map(v=>`<option value="${esc(v.key)}">`).join('')}${cur.demo?DEMO_VEH.map(v=>`<option value="${v.key}">`).join(''):''}</datalist>
@@ -362,27 +363,28 @@ function viewDespacho(){confirmAl=false;
   recalc()}
 
 function readSide(s,name){const o={};
-  o.levelMm=E.levelFromReadings(s.lv.map(num));o.tempF=E.tempFromReadings(s.tv.map(num));o.fwlMm=num(s.fwl)||0;o.api60=num(s.api);o.bsw=num(s.bsw);o.ambF=num(s.amb);o.fra=num(cur.fra)||0;o.ref=num(s.ref);return o}
+  o.levelMm=E.levelFromReadings(s.lv.map(num));o.tempF=E.tempFromReadings(s.tv.map(num));o.fwlMm=num(s.fwl)||0;o.api60=num(s.api);o.bsw=num(cur.bsw);o.ambF=num(s.amb);o.fra=num(cur.fra)||0;o.ref=num(s.ref);return o}
 function recalc(){
   const warns=[],errs=[];calc={};const tank=getTank(cur.tankId);
   const sides={open:readSide(cur.open),close:readSide(cur.close)};
-  if(cur.sameQ){sides.close.api60=sides.open.api60;sides.close.bsw=sides.open.bsw}
+  if(cur.sameQ){sides.close.api60=sides.open.api60}
   ['open','close'].forEach(k=>{const s=sides[k];$('#d-'+k+'-lv').innerHTML=isNaN(s.levelMm)?'Nivel adoptado: —':`Nivel adoptado (API 3): <b>${s.levelMm} mm</b>`;
     $('#d-'+k+'-tv').innerHTML=isNaN(s.tempF)?'Temperatura promedio: —':`Temperatura promedio: <b>${fmt(s.tempF,1)} °F</b>`});
   ['open','close'].forEach(k=>{const lv=cur[k].lv.map(num);if(!isNaN(lv[0])&&!isNaN(lv[1])&&lv[0]!==lv[1]&&isNaN(lv[2]))warns.push((k==='open'?'Apertura':'Cierre')+`: las lecturas de nivel 1 (${lv[0]} mm) y 2 (${lv[1]} mm) difieren. Registre una tercera lectura; mientras tanto se usa el promedio (API MPMS 3).`)});
+  if(isNaN(num(cur.bsw))||num(cur.bsw)<0||num(cur.bsw)>100)errs.push('Ingrese el %BSW de la operación (entre 0 y 100).');
   let o=null,c=null;
   if(!tank)errs.push('Elija un tanque con tabla de aforo en la biblioteca.');
   else{
     const T={table:tank.table,alpha:tank.alpha,tBase:tank.tBase};
     ['open','close'].forEach(k=>{const s=sides[k],lab=k==='open'?'Apertura':'Cierre';
-      if(isNaN(s.levelMm)||isNaN(s.tempF)||isNaN(s.api60)||isNaN(s.bsw)){errs.push(lab+': complete nivel, temperatura, API y %BSW.');return}
-      if(s.bsw<0||s.bsw>100)errs.push(lab+': %BSW debe estar entre 0 y 100.');
+      if(isNaN(s.levelMm)||isNaN(s.tempF)||isNaN(s.api60)){errs.push(lab+': complete nivel, temperatura y API.');return}
+      if(isNaN(s.bsw))return;
       if(!isNaN(s.ref)&&tank.refHeight&&Math.abs(s.ref-tank.refHeight)>(tank.refTol??2))warns.push(`${lab}: altura de referencia observada (${s.ref} mm) difiere de la de la tabla (${tank.refHeight} mm) en más de ${tank.refTol??2} mm. Revise la medición (API MPMS 3.1A).`);
       if(s.fwlMm>0&&s.fwlMm>=s.levelMm)errs.push(lab+': el nivel de agua libre no puede superar el nivel de producto.');
       try{const r=E.measure(T,s);if(k==='open')o=r;else c=r}catch(e){errs.push(lab+': '+e.message)}});
   }
   if(o&&c){if(c.levelMm>o.levelMm)warns.push('El nivel de cierre es mayor que el de apertura: no corresponde a un despacho. Revise los datos.');
-    const D=E.dispatch(o,c,{bswMode:cur.bswMode||'open'});calc={o,c,D};
+    const D=E.dispatch(o,c);calc={o,c,D};
     if(sides.open.tempF>230||sides.open.tempF<30)warns.push('Temperatura fuera del rango habitual de operación; verifique el termómetro.');
   }
   // Tabla de resultados
@@ -452,10 +454,10 @@ let confirmDemo=false,confirmAl=false;
 function meanLoad(k,n=5){const v=S.cache.vehicles[slug(k.toUpperCase())]||DEMO_VEH.find(x=>x.key===k);if(!v||!v.loads?.length)return null;const l=v.loads.slice(-n);return {mean:R(l.reduce((s,x)=>s+x.vol,0)/l.length,2),max:v.maxGov,n:l.length}}
 document.addEventListener('input',e=>{const t=e.target;if(tab!=='despacho')return;
   if(t.dataset.k){setPath(cur,t.dataset.k,t.value);if(t.dataset.k==='tankId'){const tk=getTank(t.value);if(tk&&!cur.product)cur.product=tk.product||'';if(tk&&tk.product&&!cur.open.api){const p=Object.values(S.cache.products).find(p=>p.name===tk.product);}}
-    if(t.dataset.k==='product'){const p=Object.values(S.cache.products).find(p=>p.name===t.value);if(p){if(p.api&&!cur.open.api)cur.open.api=String(p.api);if(p.bsw&&!cur.open.bsw)cur.open.bsw=String(p.bsw);syncSame();$$('[data-k="open.api"],[data-k="open.bsw"],[data-k="close.api"],[data-k="close.bsw"]').forEach(i=>i.value=getPath(cur,i.dataset.k))}}
+    if(t.dataset.k==='product'){const p=Object.values(S.cache.products).find(p=>p.name===t.value);if(p){if(p.api&&!cur.open.api)cur.open.api=String(p.api);if(p.bsw&&!cur.bsw)cur.bsw=String(p.bsw);syncSame();$$('[data-k="open.api"],[data-k="bsw"],[data-k="close.api"]').forEach(i=>i.value=getPath(cur,i.dataset.k))}}
     if(t.dataset.k.startsWith('open.')&&cur.sameQ)syncSame(true);recalc()}
   if(t.dataset.vk){const i=Number(t.closest('tr').dataset.i);cur.veh[i][t.dataset.vk]=t.value;recalc()}});
-function syncSame(upd){if(cur.sameQ){cur.close.api=cur.open.api;cur.close.bsw=cur.open.bsw;if(upd){const a=$('#in-close-api'),b=$('#in-close-bsw');if(a)a.value=cur.close.api;if(b)b.value=cur.close.bsw}}}
+function syncSame(upd){if(cur.sameQ){cur.close.api=cur.open.api;if(upd){const a=$('#in-close-api');if(a)a.value=cur.close.api}}}
 document.addEventListener('change',e=>{const t=e.target;if(tab!=='despacho')return;
   if(t.id==='sameQ'){cur.sameQ=t.checked;syncSame();viewDespacho()}
   if(t.dataset.k==='tankId'){recalc()}
@@ -467,7 +469,7 @@ document.addEventListener('click',async e=>{const t=e.target.closest('button');i
    if(t.id==='bNew'){cur=newOp();confirmDemo=false;viewDespacho()}
    if(t.id==='bSave')saveOp();
    if(t.id==='bSaveProd'){const n=cur.product.trim();if(!n)return toast('Escriba el nombre del producto.','warn');
-     await put('products',slug(n),{name:n,api:num(cur.open.api)||null,bsw:num(cur.open.bsw)||null});await audit('GUARDAR_PRODUCTO',n,`API ${cur.open.api} BSW ${cur.open.bsw}`);toast('Producto guardado.','ok');viewDespacho()}
+     await put('products',slug(n),{name:n,api:num(cur.open.api)||null,bsw:num(cur.bsw)||null});await audit('GUARDAR_PRODUCTO',n,`API ${cur.open.api} BSW ${cur.bsw}`);toast('Producto guardado.','ok');viewDespacho()}
    if(t.id==='vAdd'){cur.veh.push({key:'',vol:'',max:''});viewDespacho()}
    if(t.dataset.vdel!==undefined){cur.veh.splice(Number(t.dataset.vdel),1);if(!cur.veh.length)cur.veh.push({key:'',vol:'',max:''});viewDespacho()}
    if(t.id==='vPaste')$('#pasteBox').classList.toggle('hide');
@@ -563,8 +565,8 @@ document.addEventListener('change',async e=>{if(e.target.id==='vfile'){try{const
   if(!list.length)return toast('No se reconocieron vehículos en el archivo.','warn');for(const v of list)await addVeh(v);await audit('IMPORTAR_VEHICULOS',e.target.files[0].name,list.length+' filas');toast(list.length+' vehículos importados.','ok');viewVehiculos()}catch(er){toast('No se pudo leer: '+er.message,'bad')}}});
 
 /* ---------- Importar / exportar ---------- */
-const FIELDS=[['nivel_1_mm','lv.0'],['nivel_2_mm','lv.1'],['nivel_3_mm','lv.2'],['agua_libre_mm','fwl'],['altura_ref_obs_mm','ref'],['temp_1_F','tv.0'],['temp_2_F','tv.1'],['temp_3_F','tv.2'],['temp_ambiente_F','amb'],['api_60F','api'],['bsw_pct','bsw']];
-function templateRows(){const o=[['campo','apertura','cierre'],['orden','DSP-0002',''],['fecha',today(),''],['tanque','TK001',''],['producto','Petróleo crudo','']];
+const FIELDS=[['nivel_1_mm','lv.0'],['nivel_2_mm','lv.1'],['nivel_3_mm','lv.2'],['agua_libre_mm','fwl'],['altura_ref_obs_mm','ref'],['temp_1_F','tv.0'],['temp_2_F','tv.1'],['temp_3_F','tv.2'],['temp_ambiente_F','amb'],['api_60F','api']];
+function templateRows(){const o=[['campo','apertura','cierre'],['orden','DSP-0002',''],['fecha',today(),''],['tanque','TK001',''],['producto','Petróleo crudo',''],['bsw_pct',cur.bsw||'','']];
   FIELDS.filter(([f])=>f!=='nivel_3_mm').forEach(([f,p])=>o.push([f,getPath(cur.open,p)??'',getPath(cur.close,p)??'']));return o}
 function vehTemplate(){return [['cabezote','remolque','volumen_bbl'],...cur.veh.filter(v=>v.key).map(v=>[v.key.split('/')[0],v.key.split('/')[1]||'',num(v.vol)||''])]}
 function viewDatos(){$('#app').innerHTML=`<div id="toasts" class="msgs"></div>
@@ -576,13 +578,13 @@ const stamp=()=>{const n=new Date(),p=x=>String(x).padStart(2,'0');return 'DSP-'
 async function saveFile(filename,data){let dl=null;try{dl=window.claude?.use?await claude.use('downloads'):null}catch(e){}
   if(!dl){try{const b=data instanceof Blob?data:new Blob([data]);const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),4000);return toast('Descarga iniciada: '+filename,'ok')}catch(e){return toast('No se pudo descargar: '+e.message,'bad')}}try{const r=await dl.save({filename,data});toast('Archivo '+(r?.status==='saved'?'guardado':'entregado')+': '+filename,'ok')}catch(e){toast('Descarga no completada: '+(e.message||e.code),'warn')}}
 function applyOpRows(rows){if(cur.demo){const v=cur.veh;cur=newOp();cur.veh=v}cur.open=blankSide();cur.close=blankSide();const m={};rows.slice(1).forEach(r=>{m[String(r[0]).trim().toLowerCase()]=[r[1],r[2]]});let n=0;
-  const g=(k,i=0)=>m[k]?String(m[k][i]??'').trim():'';if(g('orden'))cur.orden=g('orden');if(g('fecha'))cur.fecha=g('fecha').slice(0,10);if(g('producto'))cur.product=g('producto');
+  const g=(k,i=0)=>m[k]?String(m[k][i]??'').trim():'';if(g('orden'))cur.orden=g('orden');if(g('fecha'))cur.fecha=g('fecha').slice(0,10);if(g('producto'))cur.product=g('producto');if(g('bsw_pct',0)||g('bsw_pct',1))cur.bsw=g('bsw_pct',0)||g('bsw_pct',1);
   if(g('tanque')){const t=[DEMO,...Object.values(S.cache.tanks)].find(t=>t.name.toLowerCase().includes(g('tanque').toLowerCase()));if(t)cur.tankId=t.id;else toast('Tanque "'+g('tanque')+'" no está en la biblioteca.','warn')}
   FIELDS.forEach(([f,p])=>{if(m[f.toLowerCase()]){setPath(cur.open,p,g(f.toLowerCase(),0));setPath(cur.close,p,g(f.toLowerCase(),1));n++}});
-  cur.sameQ=cur.open.api===cur.close.api&&cur.open.bsw===cur.close.bsw;delete cur.demo;return n}
+  cur.sameQ=cur.open.api===cur.close.api;delete cur.demo;return n}
 document.addEventListener('change',async e=>{if(e.target.id!=='ofile')return;const f=e.target.files[0];if(!f)return;
   try{const d=await readFile(f);let nOp=0,nV=0;
-    if(d.json){const j=d.json.inputs||d.json;if(j.open&&j.close){cur=Object.assign(newOp(),j);delete cur.demo;nOp=1;nV=cur.veh.length}}
+    if(d.json){const j=d.json.inputs||d.json;if(j.open&&j.close){cur=fixBsw(Object.assign(newOp(),j));delete cur.demo;nOp=1;nV=cur.veh.length}}
     else{const sheets=d.csv?{csv:d.csv}:d;for(const [n,rows] of Object.entries(sheets)){if(!rows.length)continue;const h=String(rows[0][0]).toLowerCase();
       if(h==='campo')nOp+=applyOpRows(rows);else{const v=vehFromRows(rows);if(v.length){cur.veh=v.map(x=>({key:x.key,vol:String(x.vol),max:''}));nV=v.length}}}}
     if(!nOp&&!nV)return toast('No se reconoció el formato del archivo. Descargue la plantilla.','bad');
@@ -611,7 +613,7 @@ function viewHistorial(){const l=Object.values(S.cache.ops).sort((a,b)=>a.savedA
   ${l.length?l.map(o=>`<tr><td class="t">${esc(o.id)}</td><td class="t">${esc(o.tank||'')}</td><td class="t">${esc(o.inputs?.product||'')}</td><td class="mono">${fmt(o.totals.gov)}</td><td class="mono">${fmt(o.totals.gsv)}</td><td class="mono">${fmt(o.totals.nsv)}</td><td class="mono">${o.vehicles.length}</td><td class="mono">${o.rev}</td><td class="t"><span class="chip ${o.status==='vigente'?'ok':'bad'}">${o.status}</span></td><td class="t">${esc(o.by)}</td><td class="t"><button class="b s" data-oopen="${esc(o.id)}">Abrir</button> ${o.status==='vigente'?`<button class="b s" data-ovoid="${esc(o.id)}">Anular</button>`:''}</td></tr>`).join(''):'<tr><td class="t" colspan="11">Aún no hay operaciones guardadas. Complete un despacho y pulse “Guardar operación”.</td></tr>'}</tbody></table></div>
   <div class="note">Las operaciones no se borran: se anulan, y cada cambio queda en la auditoría.</div></section>`}
 document.addEventListener('click',async e=>{const t=e.target.closest('button');if(!t||tab!=='historial')return;
-  if(t.dataset.oopen){const o=S.cache.ops[t.dataset.oopen];cur=Object.assign(newOp(),JSON.parse(JSON.stringify(o.inputs)));cur.rev=o.rev;await audit('ABRIR_OPERACION',o.id,'rev '+o.rev);go('despacho')}
+  if(t.dataset.oopen){const o=S.cache.ops[t.dataset.oopen];cur=fixBsw(Object.assign(newOp(),JSON.parse(JSON.stringify(o.inputs))));cur.rev=o.rev;await audit('ABRIR_OPERACION',o.id,'rev '+o.rev);go('despacho')}
   if(t.dataset.ovoid){const o=S.cache.ops[t.dataset.ovoid];o.status='anulada';await put('ops',o.id,o);await audit('ANULAR_OPERACION',o.id,'rev '+o.rev);viewHistorial()}});
 
 /* ---------- Auditoría ---------- */
@@ -626,7 +628,7 @@ document.addEventListener('click',async e=>{const t=e.target.closest('button');i
 
 /* ---------- Guía ---------- */
 function viewGuia(){$('#app').innerHTML=`<section class="card guide"><h2>Guía de operación</h2>
- <h3>Flujo normal</h3><ol><li>En <b>Tanques y aforo</b> cargue la tabla del tanque (nivel en mm, volumen en bbl, m³ o galones) una sola vez.</li><li>En <b>Despacho</b> elija tanque y producto. Ingrese dos lecturas de nivel (una tercera solo si las dos primeras difieren) y tres lecturas de temperatura, de apertura y de cierre, el nivel de agua libre, la gravedad API a 60 °F y el %BSW.</li><li>Agregue los binomios del bache con su volumen programado, que es el máximo a cargar en ese vehículo. Puede pegar desde Excel o importar un archivo. Al elegir un binomio conocido se propone la media de sus últimos 5 cargues.</li><li>Revise el chequeo: las tres sumas (GOV, GSV, NSV) deben cuadrar con el despacho. Guarde la operación y exporte el reporte.</li></ol>
+ <h3>Flujo normal</h3><ol><li>En <b>Tanques y aforo</b> cargue la tabla del tanque (nivel en mm, volumen en bbl, m³ o galones) una sola vez.</li><li>En <b>Despacho</b> elija tanque y producto. Ingrese dos lecturas de nivel (una tercera solo si las dos primeras difieren) y tres lecturas de temperatura, de apertura y de cierre, el nivel de agua libre y la gravedad API a 60 °F. El %BSW es uno solo para toda la operación y se ingresa en el encabezado.</li><li>Agregue los binomios del bache con su volumen programado, que es el máximo a cargar en ese vehículo. Puede pegar desde Excel o importar un archivo. Al elegir un binomio conocido se propone la media de sus últimos 5 cargues.</li><li>Revise el chequeo: las tres sumas (GOV, GSV, NSV) deben cuadrar con el despacho. Guarde la operación y exporte el reporte.</li></ol>
  <h3>Secuencia de cálculo</h3><div class="formula">Nivel adoptado (API MPMS 3): 1.ª = 2.ª → 1.ª; 2.ª = 3.ª → 2.ª; si no, promedio. Entero en mm.
 TOV  = aforo(nivel)                         2 decimales (interpolación lineal entre puntos)
 GOV  = (TOV − FWV) · CTSh + FRA             2 decimales
@@ -636,7 +638,7 @@ GSV  = GOV · CTL                            2 decimales
 NSV  = GSV · (1 − %BSW/100)                 2 decimales
 Despacho (API 12.1.1 §15.2.1, tanques de arrendamiento):
   ΔTOV, ΔGOV, ΔGSV = |apertura − cierre|
-  CSW = (100 − %BSW)/100 (5 dec.)  con el %BSW de apertura, cierre o promedio (a elección)
+  CSW = (100 − %BSW)/100 (5 dec.)  con el %BSW único de la operación (el mismo en apertura y cierre)
   NSV despacho = ΔGSV · CSW                  (no se resta NSV de apertura y cierre)
 Prorrateo: f = vol_i/Σvol (6 dec.); GOV_i = GOV·f; GSV_i = GOV_i·CTL; NSV_i = GSV_i·(1−BSW);
            diferencia total repartida por f y cierre exacto en centésimas ("ajuste a cero").</div>
