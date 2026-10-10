@@ -183,10 +183,18 @@ details summary{cursor:pointer;color:var(--accent);font-weight:600}
     return { levelMm: p.levelMm, tov, fwv, ctsh, gov, ctl, gsv, csw, nsv, tempF: p.tempF, api60: p.api60, bsw: p.bsw };
   };
 
-  // --- Despacho = apertura − cierre (valor absoluto por movimiento) ---
-  E.dispatch = function (o, c) {
+  // --- Volumen transferido, tanques de arrendamiento (API MPMS 12.1.1, §15.2.1) ---
+  // ΔTOV, ΔFWV, ΔGOV, ΔGSV = |apertura − cierre| (2 decimales).
+  // NSV transferido = ΔGSV × CSW (NO la resta de NSV de apertura y cierre), CSW = (100 − %S&W)/100 a 5 decimales.
+  // %S&W del despacho: 'open' (apertura, por defecto), 'close' (cierre) o 'avg' (promedio).
+  E.dispatch = function (o, c, opts) {
+    const mode = (opts && opts.bswMode) || 'open';
+    const bsw = mode === 'close' ? c.bsw : mode === 'avg' ? R((o.bsw + c.bsw) / 2, 4) : o.bsw;
     const d = (k) => R(Math.abs(o[k] - c[k]), 2);
-    return { tov: d('tov'), fwv: R(Math.abs(o.fwv - c.fwv), 2), gov: d('gov'), gsv: d('gsv'), nsv: d('nsv') };
+    const gsv = d('gsv');
+    const csw = R((100 - bsw) / 100, 5);
+    return { tov: d('tov'), fwv: R(Math.abs(o.fwv - c.fwv), 2), gov: d('gov'), gsv, csw, bswUsed: bsw, nsv: R(gsv * csw, 2),
+             nsvDiff: d('nsv') /* solo referencia: |NSV apertura − NSV cierre| */ };
   };
 
   // --- Prorrateo a carrotanques (hoja Ctks_Prorrateo) ---
@@ -302,11 +310,11 @@ function inp(label,path,o={}){const v=getPath(cur,path)??'';
 
 /* ---------- Estado de la operación ---------- */
 function blankSide(){return {lv:['','',''],fwl:'0',ref:'',tv:['','',''],amb:'',api:'',bsw:''}}
-function demoOp(){return {id:'',rev:0,fecha:today(),orden:'DSP-0001',tankId:'DEMO',product:'Petróleo crudo',sameQ:true,fra:'0',tol:'0.5',note:'',
+function demoOp(){return {id:'',rev:0,fecha:today(),orden:'DSP-0001',tankId:'DEMO',product:'Petróleo crudo',sameQ:true,fra:'0',tol:'0.5',bswMode:'open',note:'',
   open:{lv:['10550','10550','10550'],fwl:'0',ref:'14145',tv:['177.2','178.7','179.2'],amb:'',api:'13.8',bsw:'0.416'},
   close:{lv:['9853','9853','9853'],fwl:'0',ref:'14145',tv:['177.0','177.9','178.4'],amb:'',api:'13.8',bsw:'0.416'},
   veh:DEMO_VEH.map(v=>({key:v.key,vol:String(v.loads[0].vol),max:String(v.maxGov)})),demo:true}}
-function newOp(){return {id:'',rev:0,fecha:today(),orden:'',tankId:'',product:'',sameQ:true,fra:'0',tol:'0.5',note:'',open:blankSide(),close:blankSide(),veh:[{key:'',vol:'',max:''}]}}
+function newOp(){return {id:'',rev:0,fecha:today(),orden:'',tankId:'',product:'',sameQ:true,fra:'0',tol:'0.5',bswMode:'open',note:'',open:blankSide(),close:blankSide(),veh:[{key:'',vol:'',max:''}]}}
 let cur=demoOp(), tab='despacho', calc=null;
 
 /* ---------- Pestañas ---------- */
@@ -337,13 +345,13 @@ function viewDespacho(){confirmAl=false;
    <button class="b" id="bNew">Nueva operación</button><button class="b p" id="bSave" ${S.canWrite?'':'disabled'}>Guardar operación</button></div>
    <div class="grid">${inp('N.º de orden / despacho','orden',{txt:1})}${inp('Fecha','fecha',{txt:1,type:'date'})}
     <label class="f">Tanque (tabla de aforo)<select id="selTank" data-k="tankId"><option value="">— elegir —</option>${tankOpts()}</select></label>
-    ${inp('Producto','product',{txt:1,list:'prodlist'})}${inp('Ajuste techo flotante FRA','fra',{u:'bbl'})}${inp('Tolerancia programado vs bache','tol',{u:'%'})}</div>
+    ${inp('Producto','product',{txt:1,list:'prodlist'})}${inp('Ajuste techo flotante FRA','fra',{u:'bbl'})}${inp('Tolerancia programado vs bache','tol',{u:'%'})}<label class="f"><span>%BSW aplicado al despacho</span><select id="selBsw" data-k="bswMode"><option value="open" ${(cur.bswMode||'open')==='open'?'selected':''}>Apertura (muestra del producto despachado)</option><option value="close" ${cur.bswMode==='close'?'selected':''}>Cierre</option><option value="avg" ${cur.bswMode==='avg'?'selected':''}>Promedio apertura y cierre</option></select></label></div>
    <div class="row"><button class="b s" id="bSaveProd">Guardar producto en la biblioteca</button><span class="note">Las medidas se ingresan en milímetros y los volúmenes salen en barriles (bbl) a 60 °F.</span></div>
    <datalist id="prodlist">${Object.values(S.cache.products).map(p=>`<option value="${esc(p.name)}">`).join('')}</datalist>
    <datalist id="vehlist">${Object.values(S.cache.vehicles).map(v=>`<option value="${esc(v.key)}">`).join('')}${cur.demo?DEMO_VEH.map(v=>`<option value="${v.key}">`).join(''):''}</datalist>
   </section>
   <div class="two">${sideForm('open','Apertura (antes del cargue)')}${sideForm('close','Cierre (después del cargue)')}</div>
-  <section class="card"><h3>Cálculo del tanque</h3><div id="msgs" class="msgs"></div><div class="tw" id="resT"></div></section>
+  <section class="card"><h3>Cálculo del tanque</h3><div id="msgs" class="msgs"></div><div class="tw" id="resT"></div><div class="note" id="resN"></div></section>
   <section class="card"><div class="row"><h3 style="margin-right:auto">Bache de carrotanques</h3>
     <button class="b s" id="vAdd">+ Agregar vehículo</button><button class="b s" id="vPaste">Pegar desde Excel</button><button class="b s" id="vEven">Usar media histórica</button></div>
    <div id="pasteBox" class="hide"><textarea id="pasteTa" rows="5" placeholder="Pegue columnas: cabezote/remolque ⇥ volumen"></textarea><button class="b s" id="pasteOk" style="margin-top:6px">Aplicar</button></div>
@@ -374,16 +382,17 @@ function recalc(){
       try{const r=E.measure(T,s);if(k==='open')o=r;else c=r}catch(e){errs.push(lab+': '+e.message)}});
   }
   if(o&&c){if(c.levelMm>o.levelMm)warns.push('El nivel de cierre es mayor que el de apertura: no corresponde a un despacho. Revise los datos.');
-    const D=E.dispatch(o,c);calc={o,c,D};
+    const D=E.dispatch(o,c,{bswMode:cur.bswMode||'open'});calc={o,c,D};
     if(sides.open.tempF>230||sides.open.tempF<30)warns.push('Temperatura fuera del rango habitual de operación; verifique el termómetro.');
   }
   // Tabla de resultados
   const rows=[['TOV · Volumen total observado','tov',2],['Agua libre FWV','fwv',2],['CTSh · Corrección por temperatura de lámina','ctsh',5],['GOV · Volumen bruto observado','gov',2],['CTL · Corrección por temperatura del líquido','ctl',5],['GSV · Volumen bruto estándar','gsv',2],['CSW · Factor por agua y sedimento','csw',5],['NSV · Volumen neto estándar','nsv',2]];
   const D=calc.D;
   $('#resT').innerHTML=`<table><thead><tr><th class="t">Concepto</th><th>Apertura</th><th>Cierre</th><th>Despacho (bbl)</th></tr></thead><tbody>`+
-   rows.map(([l,k,d])=>{const dv=D&&D[k]!==undefined?fmt(D[k],2):(k==='ctl'&&D&&D.gov?fmt(D.gsv/D.gov,5):'');
+   rows.map(([l,k,d])=>{const dv=D&&D[k]!==undefined?fmt(D[k],d):(k==='ctl'&&D&&D.gov?fmt(D.gsv/D.gov,5):'');
      return `<tr><td class="t">${l}</td><td class="mono">${o?fmt(o[k],d):'—'}</td><td class="mono">${c?fmt(c[k],d):'—'}</td><td class="mono key">${dv===''?'':dv}</td></tr>`}).join('')+
    `<tr><td class="t">Nivel adoptado (mm) · T (°F) · API · BSW (%)</td><td class="mono">${o?`${o.levelMm} · ${fmt(o.tempF,1)} · ${fmt(o.api60,1)} · ${fmt(o.bsw,3)}`:'—'}</td><td class="mono">${c?`${c.levelMm} · ${fmt(c.tempF,1)} · ${fmt(c.api60,1)} · ${fmt(c.bsw,3)}`:'—'}</td><td></td></tr></tbody></table>`;
+  $('#resN').innerHTML=D?`Despacho según API MPMS 12.1.1 §15.2.1 (tanques de arrendamiento): GOV, GSV = |apertura − cierre|; <b>NSV = ΔGSV × CSW</b> = ${fmt(D.gsv)} × ${fmt(D.csw,5)} (BSW ${fmt(D.bswUsed,3)} %). Referencia: NSV apertura − NSV cierre = ${fmt(D.nsvDiff)} bbl.`:'';
   // Vehículos
   let pr=null;const vehs=cur.veh.map((v,i)=>({id:v.key||('#'+(i+1)),vol:num(v.vol)||0,maxGov:0}));
   if(D&&D.gov>0&&vehs.some(v=>v.vol>0)){try{pr=E.prorate(D,vehs)}catch(e){errs.push(e.message)}}
@@ -588,7 +597,7 @@ document.addEventListener('click',async e=>{const t=e.target.closest('button');i
     const fn=stamp()+'.csv';audit('EXPORTAR_REPORTE',fn,'csv carrotanques · orden '+cur.orden);saveFile(fn,new Blob([[h,...calc.pr.rows.map(r=>[r.id,r.vol,r.f,r.govA,r.gsvA,r.nsvA,r.bswA].join(';'))].join('\n')],{type:'text/csv'}))}
   if(t.id==='exX'){if(!calc.D)return toast('Complete el cálculo antes de exportar.','warn');if(!window.XLSX)return toast('La librería de Excel no cargó; use CSV.','warn');
     const wb=XLSX.utils.book_new();const o=calc.o,c=calc.c,D=calc.D;
-    const fn=stamp()+'.xlsx';const res=[['Código de reporte',fn.replace('.xlsx','')],['Orden',cur.orden],['Fecha',cur.fecha],['Tanque',getTank(cur.tankId)?.name],['Producto',cur.product],['Usuario',S.me.name],[],['Concepto','Apertura','Cierre','Despacho'],
+    const fn=stamp()+'.xlsx';const res=[['Código de reporte',fn.replace('.xlsx','')],['Orden',cur.orden],['%BSW aplicado al despacho',D.bswUsed],['Fecha',cur.fecha],['Tanque',getTank(cur.tankId)?.name],['Producto',cur.product],['Usuario',S.me.name],[],['Concepto','Apertura','Cierre','Despacho'],
       ...[['TOV','tov'],['FWV','fwv'],['CTSh','ctsh'],['GOV','gov'],['CTL','ctl'],['GSV','gsv'],['CSW','csw'],['NSV','nsv']].map(([l,k])=>[l,o[k],c[k],D[k]??'']),['Nivel mm',o.levelMm,c.levelMm],['Temp °F',o.tempF,c.tempF],['API 60F',o.api60,c.api60],['BSW %',o.bsw,c.bsw]];
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(res),'Resumen');
     if(calc.pr){const p=calc.pr;const v=[['Binomio','Vol. programado','Fracción','GOV prorrateo','GSV prorrateo','NSV prorrateo','GOV ajustado','GSV ajustado','NSV ajustado','%BSW'],...p.rows.map(r=>[r.id,r.vol,r.f,r.govP,r.gsvP,r.nsvP,r.govA,r.gsvA,r.nsvA,r.bswA]),
@@ -625,7 +634,10 @@ CTSh = 1 + 2·α·(Tsh−Tbase) + α²·(Tsh−Tbase)²   5 decimales (API 12.1.
 CTL  = Tabla 6A/24A (API 11.1-2004, crudo)  5 decimales
 GSV  = GOV · CTL                            2 decimales
 NSV  = GSV · (1 − %BSW/100)                 2 decimales
-Despacho = |apertura − cierre| en TOV, GOV, GSV y NSV
+Despacho (API 12.1.1 §15.2.1, tanques de arrendamiento):
+  ΔTOV, ΔGOV, ΔGSV = |apertura − cierre|
+  CSW = (100 − %BSW)/100 (5 dec.)  con el %BSW de apertura, cierre o promedio (a elección)
+  NSV despacho = ΔGSV · CSW                  (no se resta NSV de apertura y cierre)
 Prorrateo: f = vol_i/Σvol (6 dec.); GOV_i = GOV·f; GSV_i = GOV_i·CTL; NSV_i = GSV_i·(1−BSW);
            diferencia total repartida por f y cierre exacto en centésimas ("ajuste a cero").</div>
  <h3>Seguridad y alcance</h3><ul><li>El módulo de autenticación con segundo factor (TOTP) estará disponible para la versión privada.</li><li>Los datos compartidos viven en la base del artefacto solo cuando el visor la concede. Si el chip “Datos” dice <i>navegador</i>, lo guardado queda solo en este equipo.</li><li>Cálculo de CTL para petróleo crudo (Tabla 6A/24A). Para refinados (6B/24B), lubricantes o densidades observadas a temperatura distinta de 60 °F hace falta ampliar el motor.</li><li>El CTL se evalúa con aritmética de doble precisión y se redondea de forma decimal a 5 cifras; las sumas del bache se concilian en enteros de centésimas de barril.</li><li>Valide el uso comercial contra el procedimiento de su compañía y el contrato; la tolerancia de altura de referencia es configurable por tanque.</li></ul></section>`}
