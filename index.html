@@ -95,10 +95,11 @@ details summary{cursor:pointer;color:var(--accent);font-weight:600}
   // Redondeo decimal half-up robusto (API MPMS 12.1.1 §12.1.1.? reglas de redondeo por paso)
   E.round = function (x, n) {
     if (x === null || x === undefined || !isFinite(x)) return NaN;
+    const shift = (v, k) => { const p = String(v).split('e'); return Number(p[0] + 'e' + ((p[1] ? Number(p[1]) : 0) + k)); };
     const s = Number(Number(x).toPrecision(15));
     const sign = s < 0 ? -1 : 1;
-    const r = Math.round(Number(Math.abs(s) + 'e' + n));
-    return sign * Number(r + 'e-' + n);
+    const r = Math.round(shift(Math.abs(s), n));
+    return sign * shift(r, -n) || 0;
   };
   const R = E.round;
   const cents = (x) => Math.round(Number(x.toPrecision ? x.toPrecision(15) : x) * 100); // entero (1/100 bbl)
@@ -248,8 +249,8 @@ async function sha256(t){try{const b=await crypto.subtle.digest('SHA-256',new Te
 /* ---------- Biblioteca de aforo: codec ---------- */
 const encT=rows=>rows.map(r=>r[0]+','+r[1]).join(';');
 const decT=s=>s?s.split(';').map(p=>{const q=p.split(',');return [Number(q[0]),Number(q[1])]}):[];
-const DEMO={id:'DEMO',name:'340 TK 010 (ejemplo del Excel)',product:'Petróleo crudo',alpha:6.2e-6,tBase:60,refHeight:14145,refTol:2,demo:true,table:DEMO_ROWS};
-const DEMO_VEH=[210.23,209.05,213,209,210,213,203,204,210,209,203].map((v,i)=>({key:'ABC'+(123+i),cab:'ABC'+(123+i),rem:'',maxGov:250,loads:[{ts:'2026-09-30',vol:v}],demo:true}));
+const DEMO={id:'DEMO',name:'TK001',product:'Petróleo crudo',alpha:6.2e-6,tBase:60,refHeight:14145,refTol:2,demo:true,table:DEMO_ROWS};
+const DEMO_VEH=[210.23,209.05,213,209,210,213,203,204,210,209,203].map((v,i)=>({key:'ABC'+(123+i),cab:'ABC'+(123+i),rem:'',maxGov:250,loads:[{ts:'2026-09-30',vol:R(v*2600.01/2293.28,2)}],demo:true}));
 
 /* ---------- Almacenamiento: db compartida si existe, si no navegador ---------- */
 const COLS=['tanks','tabs','products','vehicles','ops','audit'];
@@ -301,11 +302,11 @@ function inp(label,path,o={}){const v=getPath(cur,path)??'';
 
 /* ---------- Estado de la operación ---------- */
 function blankSide(){return {lv:['','',''],fwl:'0',ref:'',tv:['','',''],amb:'',api:'',bsw:''}}
-function demoOp(){return {id:'',rev:0,fecha:today(),orden:'DSP-0001',tankId:'DEMO',product:'Petróleo crudo',sameQ:true,fra:'0',note:'Ejemplo tomado del Excel del proyecto (TK 010).',
+function demoOp(){return {id:'',rev:0,fecha:today(),orden:'DSP-0001',tankId:'DEMO',product:'Petróleo crudo',sameQ:true,fra:'0',tol:'0.5',note:'',
   open:{lv:['10550','10550','10550'],fwl:'0',ref:'14145',tv:['177.2','178.7','179.2'],amb:'',api:'13.8',bsw:'0.416'},
   close:{lv:['9853','9853','9853'],fwl:'0',ref:'14145',tv:['177.0','177.9','178.4'],amb:'',api:'13.8',bsw:'0.416'},
   veh:DEMO_VEH.map(v=>({key:v.key,vol:String(v.loads[0].vol),max:String(v.maxGov)})),demo:true}}
-function newOp(){return {id:'',rev:0,fecha:today(),orden:'',tankId:'',product:'',sameQ:true,fra:'0',note:'',open:blankSide(),close:blankSide(),veh:[{key:'',vol:'',max:''}]}}
+function newOp(){return {id:'',rev:0,fecha:today(),orden:'',tankId:'',product:'',sameQ:true,fra:'0',tol:'0.5',note:'',open:blankSide(),close:blankSide(),veh:[{key:'',vol:'',max:''}]}}
 let cur=demoOp(), tab='despacho', calc=null;
 
 /* ---------- Pestañas ---------- */
@@ -330,14 +331,14 @@ function vehRow(v,i){return `<tr data-i="${i}"><td class="t">${i+1}</td>
  <td><input data-vk="max" inputmode="decimal" value="${esc(v.max)}" aria-label="GOV máximo ${i+1}" style="width:96px"></td>
  <td id="vf${i}"></td><td id="vg${i}" class="mono"></td><td id="vs${i}" class="mono"></td><td id="vn${i}" class="mono key"></td><td id="vb${i}"></td><td id="ve${i}" class="t"></td>
  <td class="t"><button class="b s" data-vdel="${i}" aria-label="Quitar fila ${i+1}">✕</button></td></tr>`}
-function viewDespacho(){
+function viewDespacho(){confirmAl=false;
   $('#app').innerHTML=`<div id="toasts" class="msgs"></div>
-  ${cur.demo?'<div class="msg info">Ejemplo precargado con los datos del Excel del proyecto (TK 010, 11 carrotanques). Cambie cualquier valor o pulse “Nueva operación”.</div>':''}
+  ${cur.demo?'<div class="msg info">Datos de Ejemplo, pulse "nueva operación" para sus datos de despacho.</div>':''}
   <section class="card"><div class="row"><h2 style="margin-right:auto">Operación de despacho${cur.id?` · ${esc(cur.id)} <span class="chip">rev ${cur.rev}</span>`:''}</h2>
    <button class="b" id="bNew">Nueva operación</button><button class="b p" id="bSave" ${S.canWrite?'':'disabled'}>Guardar operación</button></div>
    <div class="grid">${inp('N.º de orden / despacho','orden',{txt:1})}${inp('Fecha','fecha',{txt:1,type:'date'})}
     <label class="f">Tanque (tabla de aforo)<select id="selTank" data-k="tankId"><option value="">— elegir —</option>${tankOpts()}</select></label>
-    ${inp('Producto','product',{txt:1,list:'prodlist'})}${inp('Ajuste techo flotante FRA','fra',{u:'bbl'})}</div>
+    ${inp('Producto','product',{txt:1,list:'prodlist'})}${inp('Ajuste techo flotante FRA','fra',{u:'bbl'})}${inp('Tolerancia programado vs bache','tol',{u:'%'})}</div>
    <div class="row"><button class="b s" id="bSaveProd">Guardar producto en la biblioteca</button><span class="note">Las medidas se ingresan en milímetros y los volúmenes salen en barriles (bbl) a 60 °F.</span></div>
    <datalist id="prodlist">${Object.values(S.cache.products).map(p=>`<option value="${esc(p.name)}">`).join('')}</datalist>
    <datalist id="vehlist">${Object.values(S.cache.vehicles).map(v=>`<option value="${esc(v.key)}">`).join('')}${cur.demo?DEMO_VEH.map(v=>`<option value="${v.key}">`).join(''):''}</datalist>
@@ -389,17 +390,37 @@ function recalc(){
   calc.pr=pr;
   cur.veh.forEach((v,i)=>{const r=pr&&pr.rows.find(x=>x.id===(v.key||('#'+(i+1))));const set=(id,h)=>{const e=$('#'+id+i);if(e)e.innerHTML=h};
     set('vf',r?fmt(r.f,6):'');set('vg',r?fmt(r.govA):'');set('vs',r?fmt(r.gsvA):'');set('vn',r?fmt(r.nsvA):'');set('vb',r?fmt(r.bswA,3):'');
-    set('ve',r?(r.overMax?'<span class="chip bad">Excede GOV máx.</span>':(r.maxGov?'<span class="chip ok">En límite</span>':'<span class="chip">Sin límite</span>')):'')});
+    const ch=[];if(r){if(r.over)ch.push(`<span class="chip bad" title="El GOV prorrateado (${fmt(r.govA)} bbl) supera el volumen programado (${fmt(r.vol)} bbl)">Posible sobrellenado</span>`);
+      if(r.overMax)ch.push('<span class="chip bad">Excede GOV máx.</span>');if(!ch.length)ch.push(r.maxGov?'<span class="chip ok">OK</span>':'<span class="chip">Sin límite</span>')}
+    set('ve',ch.join(' '))});
   $('#vfoot').innerHTML=pr?`<tr class="tot"><td></td><td class="t">Σ ${pr.rows.length} vehículos</td><td class="mono">${fmt(pr.sumVol)}</td><td></td><td class="mono">${fmt(pr.rows.reduce((s,r)=>s+r.f,0),6)}</td><td class="mono">${fmt(pr.sums.gov.ajustado)}</td><td class="mono">${fmt(pr.sums.gsv.ajustado)}</td><td class="mono">${fmt(pr.sums.nsv.ajustado)}</td><td></td><td></td><td></td></tr>`:'';
   // Chequeos
+  const al=[];
   if(pr){const nm={gov:'GOV',gsv:'GSV',nsv:'NSV'};
-    $('#checks').innerHTML=['gov','gsv','nsv'].map(k=>{const s=pr.sums[k];return `<div class="ck ${s.ok?'ok':'bad'}"><span class="k">Σ ${nm[k]} vehículos</span><span class="v">${fmt(s.ajustado)}</span><span class="d">Despacho ${fmt(s.total)} · diferencia ${fmt(s.ajustado-s.total)} bbl · prorrateo directo ${fmt(s.prorrateo,4)} (dif. ${fmt(s.diffPre,4)})</span><span class="s">${s.ok?'✓ Cuadra':'✗ No cuadra'}</span></div>`}).join('');
-    const over=pr.rows.filter(r=>r.overMax);if(over.length)warns.push('Vehículos que exceden su GOV máximo: '+over.map(r=>r.id).join(', ')+'.');
-    const ratio=(pr.sumVol-D.gov)/D.gov*100;if(Math.abs(ratio)>0.5)warns.push(`El volumen programado (${fmt(pr.sumVol)} bbl) difiere ${fmt(ratio,2)} % del GOV del despacho; el prorrateo reparte la diferencia proporcionalmente.`);
-    const ids=cur.veh.map(v=>v.key).filter(Boolean);if(new Set(ids).size!==ids.length)warns.push('Hay binomios repetidos en el bache.');
+    const tolP=isNaN(num(cur.tol))?0.5:Math.max(0,num(cur.tol));
+    // 1) cada vehículo: programado >= GOV prorrateado (holgura 0,05 bbl por redondeo)
+    pr.rows.forEach(r=>{r.over=r.govA-r.vol>0.05});
+    const sob=pr.rows.filter(r=>r.over);
+    // 2) bache: Σ programado vs GOV del despacho
+    const gap=R(pr.sumVol-D.gov,2),gapPct=D.gov?gap/D.gov*100:0,avg=pr.sumVol/pr.rows.length;
+    const cov=Math.abs(gapPct)<=tolP?'ok':(gap<0?'falta':'sobra');
+    const nVeh=Math.max(1,Math.ceil(Math.abs(gap)/avg));
+    $('#checks').innerHTML=['gov','gsv','nsv'].map(k=>{const s=pr.sums[k];return `<div class="ck ${s.ok?'ok':'bad'}"><span class="k">Σ ${nm[k]} vehículos</span><span class="v">${fmt(s.ajustado)}</span><span class="d">Despacho ${fmt(s.total)} · diferencia ${fmt(s.ajustado-s.total)} bbl · prorrateo directo ${fmt(s.prorrateo,4)} (dif. ${fmt(s.diffPre,4)})</span><span class="s">${s.ok?'✓ Cuadra':'✗ No cuadra'}</span></div>`}).join('')+
+     `<div class="ck ${cov==='ok'?'ok':'bad'}"><span class="k">Programado vs bache</span><span class="v">${fmt(pr.sumVol)}</span><span class="d">GOV del despacho ${fmt(D.gov)} · diferencia ${fmt(gap)} bbl (${fmt(gapPct,2)} %) · tolerancia ${fmt(tolP,2)} %</span><span class="s">${cov==='ok'?'✓ El programa cubre el bache':cov==='falta'?'✗ Faltan vehículos':'✗ Sobran vehículos'}</span></div>`+
+     `<div class="ck ${sob.length?'bad':'ok'}"><span class="k">Programado ≥ GOV prorrateado</span><span class="v">${pr.rows.length-sob.length} de ${pr.rows.length}</span><span class="d">Cada vehículo debe tener programado igual o mayor que el GOV que le corresponde</span><span class="s">${sob.length?'✗ '+sob.length+' con posible sobrellenado':'✓ Todos en orden'}</span></div>`;
+    if(sob.length)al.push({k:'bad',t:`Posible sobrellenado o sobrepeso: el GOV prorrateado supera el volumen programado en ${sob.map(r=>`${r.id} (+${fmt(r.govA-r.vol)} bbl)`).join(', ')}. Revise el programa o el volumen real cargado.`});
+    if(cov==='falta')al.push({k:'bad',t:`Faltan vehículos programados para completar el bache: el volumen programado (${fmt(pr.sumVol)} bbl) es ${fmt(-gap)} bbl menor que el GOV despachado (${fmt(D.gov)} bbl). Equivale a ${nVeh} carrotanque${nVeh>1?'s':''} más del tamaño promedio programado. Agregue los vehículos faltantes o revise las medidas del tanque.`});
+    if(cov==='sobra')al.push({k:'bad',t:`Hay carrotanques de más para este bache: el volumen programado (${fmt(pr.sumVol)} bbl) supera en ${fmt(gap)} bbl el GOV despachado (${fmt(D.gov)} bbl). Equivale a ${nVeh} carrotanque${nVeh>1?'s':''} del tamaño promedio programado. Retire vehículos o revise las medidas del tanque.`});
+    const over=pr.rows.filter(r=>r.overMax);if(over.length)al.push({k:'warn',t:'Vehículos que exceden su GOV máximo: '+over.map(r=>r.id).join(', ')+'.'});
+    const ids=cur.veh.map(v=>v.key).filter(Boolean);if(new Set(ids).size!==ids.length)al.push({k:'warn',t:'Hay binomios repetidos en el bache.'});
+    calc.alerts=al.map(a=>a.t);calc.cov=cov;
+    // refrescar estado por vehículo con la bandera de sobrellenado ya calculada
+    cur.veh.forEach((v,i)=>{const r=pr.rows.find(x=>x.id===(v.key||('#'+(i+1))));const e=$('#ve'+i);if(!e||!r)return;const ch=[];
+      if(r.over)ch.push(`<span class="chip bad" title="GOV prorrateado ${fmt(r.govA)} bbl > programado ${fmt(r.vol)} bbl">Posible sobrellenado</span>`);
+      if(r.overMax)ch.push('<span class="chip bad">Excede GOV máx.</span>');if(!ch.length)ch.push(r.maxGov?'<span class="chip ok">OK</span>':'<span class="chip">Sin límite</span>');e.innerHTML=ch.join(' ')});
   }else $('#checks').innerHTML='<div class="msg info">Complete el cálculo del tanque y los volúmenes programados para chequear la suma.</div>';
   $('#msgs').innerHTML=errs.map(e=>`<div class="msg bad">${esc(e)}</div>`).join('')+warns.map(w=>`<div class="msg warn">${esc(w)}</div>`).join('');
-  $('#alerts').innerHTML='';
+  $('#alerts').innerHTML=al.map(a=>`<div class="msg ${a.k}">${esc(a.t)}</div>`).join('');
 }
 
 /* ---------- Eventos del Despacho ---------- */
@@ -407,18 +428,19 @@ async function saveOp(){
   if(!calc.D||!calc.pr)return toast('Complete el cálculo antes de guardar.','warn');
   if(!cur.orden.trim())return toast('Ingrese el número de orden.','warn');
   if(!calc.pr.ok)return toast('La suma de carrotanques no cuadra con el despacho. Revise antes de guardar.','bad');
+  if(calc.alerts?.length&&!confirmAl){confirmAl=true;return toast('Hay alertas en el bache ('+calc.alerts.length+'). Revíselas; pulse Guardar de nuevo para guardar con las alertas registradas.','warn')}
   const tank=getTank(cur.tankId);if(cur.tankId==='DEMO'&&!confirmDemo)return toast('Está usando el tanque de ejemplo. Pulse Guardar de nuevo para confirmar.','warn',confirmDemo=true);
   if(!cur.id)cur.id=slug(cur.orden)+'-'+cur.fecha;cur.rev=(cur.rev||0)+1;delete cur.demo;
   const rec={id:cur.id,rev:cur.rev,savedAt:new Date().toISOString(),by:S.me.name,status:'vigente',inputs:JSON.parse(JSON.stringify(cur)),tank:tank?.name,
-    totals:calc.D,open:calc.o,close:calc.c,vehicles:calc.pr.rows.map(r=>({id:r.id,vol:r.vol,f:r.f,gov:r.govA,gsv:r.gsvA,nsv:r.nsvA,bsw:r.bswA}))};
+    totals:calc.D,alerts:calc.alerts||[],open:calc.o,close:calc.c,vehicles:calc.pr.rows.map(r=>({id:r.id,vol:r.vol,f:r.f,gov:r.govA,gsv:r.gsvA,nsv:r.nsvA,bsw:r.bswA}))};
   rec.hash=await sha256(JSON.stringify(rec.inputs)+JSON.stringify(rec.totals));
   await put('ops',cur.id,rec);
   for(const v of cur.veh){const key=(v.key||'').trim().toUpperCase();const vol=num(v.vol);if(!key||!vol)continue;
     const s=slug(key);const ex=S.cache.vehicles[s]||{key,cab:key.split('/')[0],rem:key.split('/')[1]||'',maxGov:num(v.max)||0,loads:[]};
     ex.loads=[...(ex.loads||[]),{ts:cur.fecha,vol,op:cur.id}].slice(-20);if(num(v.max))ex.maxGov=num(v.max);await put('vehicles',s,ex)}
-  await audit('GUARDAR_OPERACION',cur.id,`rev ${cur.rev} · ${tank?.name} · GOV ${calc.D.gov} GSV ${calc.D.gsv} NSV ${calc.D.nsv} · sha ${rec.hash.slice(0,16)}`);
+  await audit('GUARDAR_OPERACION',cur.id,`rev ${cur.rev} · ${tank?.name} · GOV ${calc.D.gov} GSV ${calc.D.gsv} NSV ${calc.D.nsv} · alertas ${rec.alerts.length} · sha ${rec.hash.slice(0,16)}`);
   toast('Operación guardada: '+cur.id+' (rev '+cur.rev+').','ok');viewDespacho()}
-let confirmDemo=false;
+let confirmDemo=false,confirmAl=false;
 function meanLoad(k,n=5){const v=S.cache.vehicles[slug(k.toUpperCase())]||DEMO_VEH.find(x=>x.key===k);if(!v||!v.loads?.length)return null;const l=v.loads.slice(-n);return {mean:R(l.reduce((s,x)=>s+x.vol,0)/l.length,2),max:v.maxGov,n:l.length}}
 document.addEventListener('input',e=>{const t=e.target;if(tab!=='despacho')return;
   if(t.dataset.k){setPath(cur,t.dataset.k,t.value);if(t.dataset.k==='tankId'){const tk=getTank(t.value);if(tk&&!cur.product)cur.product=tk.product||'';if(tk&&tk.product&&!cur.open.api){const p=Object.values(S.cache.products).find(p=>p.name===tk.product);}}
@@ -502,7 +524,7 @@ document.addEventListener('click',async e=>{const t=e.target.closest('button');i
       const a=num(tankDraft.alpha);if(!(a>0&&a<1e-4))return toast('α de la lámina fuera de rango (acero al carbono ≈ 6.2e-6).','bad');
       const id=await saveTank({name:tankDraft.name.trim(),product:tankDraft.product,alpha:a,tBase:num(tankDraft.tBase)||60,refHeight:num(tankDraft.refHeight)||null,refTol:num(tankDraft.refTol)||2},tankDraft.rows);
       await audit('GUARDAR_TABLA_AFORO',id,tankDraft.rows.length+' puntos, archivo '+(tankDraft.fileName||'pegado'));toast('Tabla guardada.','ok');tankDraft={...tankDraft,name:'',rows:null,fileName:''};viewTanques()}}
-  if(t.dataset.tsave){const id=await saveTank({name:'340 TK 010',product:DEMO.product,alpha:DEMO.alpha,tBase:60,refHeight:DEMO.refHeight,refTol:2},DEMO.table);await audit('GUARDAR_TABLA_AFORO',id,'extracto del Excel (8000–11500 mm)');toast('Ejemplo guardado.','ok');viewTanques()}
+  if(t.dataset.tsave){const id=await saveTank({name:'TK001',product:DEMO.product,alpha:DEMO.alpha,tBase:60,refHeight:DEMO.refHeight,refTol:2},DEMO.table);await audit('GUARDAR_TABLA_AFORO',id,'extracto del Excel (8000–11500 mm)');toast('Ejemplo guardado.','ok');viewTanques()}
   if(t.dataset.tdel){const id=t.dataset.tdel;await del('tanks',id);for(const k of Object.keys(S.cache.tabs).filter(k=>k.startsWith(id+'__')))await del('tabs',k);await audit('ELIMINAR_TABLA_AFORO',id,'');viewTanques()}
   if(t.dataset.tq){const tk=getTank(t.dataset.tq);$('#tq').innerHTML=`<label class="f">Nivel (mm) en ${esc(tk.name)}<input id="tqin" class="n" style="max-width:160px"></label><div class="derived" id="tqout"></div>`;
     $('#tqin').addEventListener('input',ev=>{const v=num(ev.target.value);try{$('#tqout').innerHTML=isNaN(v)?'':`TOV = <b>${fmt(E.tov(tk.table,v),2)} bbl</b>`}catch(er){$('#tqout').textContent=er.message}})}
