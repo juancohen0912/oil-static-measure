@@ -29,6 +29,13 @@ function run(file) {
   assert.equal(D.gsv, 2428.89);
   assert.equal(D.csw, 0.9965);
   assert.equal(D.nsv, 2420.39);
+  // API MPMS 12.1.1 §14.2: cálculo en cadena, solo se redondea el resultado final
+  // (el GOV redondeado no se reinserta en el cálculo del GSV ni del NSV).
+  for (const s of [o, c]) {
+    const raw = (s.tov - s.fwv) * s.ctsh;
+    assert.equal(s.gsv, E.round(raw * s.ctl, 2), 'GSV debe calcularse con el GOV sin redondear');
+    assert.equal(s.nsv, E.round(raw * s.ctl * s.csw, 2), 'NSV debe calcularse en cadena');
+  }
   // Referencia de la Tabla 6A (API MPMS 11.1): 30,0 °API a 100 °F → 0,9821
   assert.equal(E.CTL(30, 100), 0.9821);
   const vols = [227.8, 235.57, 220.02, 233.35, 230.02, 238.91, 222.24, 231.13, 234.46, 226.69, 232.24];
