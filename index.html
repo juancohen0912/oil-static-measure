@@ -1,4 +1,10 @@
 <!doctype html>
+<!--
+  Oil Static Measure
+  © 2026 Juan Cohen. Todos los derechos reservados.
+  Este software y su código fuente son propiedad de Juan Cohen. Se prohíbe su copia,
+  modificación, distribución o uso comercial sin autorización previa y por escrito del autor.
+-->
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light}body{margin:0}[hidden]{display:none!important}</style></head><body>
 <title>Oil Static Measure</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -73,6 +79,10 @@ details summary{cursor:pointer;color:var(--accent);font-weight:600}
 .guide p,.guide li{max-width:72ch} .guide code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface2);padding:1px 5px;border-radius:3px}
 .guide ul,.guide ol{margin:4px 0;padding-left:20px}
 .formula{font-family:var(--f-mono);font-size:12.5px;background:var(--surface2);padding:8px 10px;border-radius:4px;overflow-x:auto;white-space:pre}
+footer.legal{margin-top:28px;padding-top:14px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:6px}
+footer.legal p{margin:0;max-width:110ch}
+footer.legal b{color:var(--ink);font-weight:600}
+footer.legal a{color:var(--accent)}
 @media (max-width:560px){.brand{font-size:22px}}
 @media (prefers-reduced-motion:no-preference){button.b{transition:border-color .15s}}
 </style>
@@ -84,6 +94,11 @@ details summary{cursor:pointer;color:var(--accent);font-weight:600}
 </div>
 <nav class="tabs" id="tabs" role="tablist"></nav></header>
 <main id="app"></main>
+<footer class="legal">
+  <p><b>© 2026 Juan Cohen.</b> Todos los derechos reservados. Oil Static Measure y su código son propiedad del autor; se prohíbe su copia, modificación o distribución sin autorización escrita.</p>
+  <p><b>Exención de responsabilidad:</b> herramienta de apoyo con fines informativos. Sus resultados no sustituyen la liquidación oficial, el procedimiento de medición vigente de cada operador ni la validación de un profesional competente. El autor no asume responsabilidad por decisiones comerciales, contractuales o fiscales tomadas con base en estos cálculos. Verifique siempre contra las ediciones vigentes de las normas API MPMS y ASTM.</p>
+  <p>Contacto y servicios de automatización: <a href="https://www.linkedin.com/in/juan-cohen-91b175b0" target="_blank" rel="noopener">Juan Cohen en LinkedIn</a></p>
+</footer>
 </div>
 
 <script>/* ===== OilStatic engine — API MPMS 3 / 11.1 / 12.1.1 / 12.1.1 prorrateo =====
@@ -600,7 +615,7 @@ document.addEventListener('click',async e=>{const t=e.target.closest('button');i
   if(t.id==='exX'){if(!calc.D)return toast('Complete el cálculo antes de exportar.','warn');if(!window.XLSX)return toast('La librería de Excel no cargó; use CSV.','warn');
     const wb=XLSX.utils.book_new();const o=calc.o,c=calc.c,D=calc.D;
     const fn=stamp()+'.xlsx';const res=[['Código de reporte',fn.replace('.xlsx','')],['Orden',cur.orden],['%BSW aplicado al despacho',D.bswUsed],['Fecha',cur.fecha],['Tanque',getTank(cur.tankId)?.name],['Producto',cur.product],['Usuario',S.me.name],[],['Concepto','Apertura','Cierre','Despacho'],
-      ...[['TOV','tov'],['FWV','fwv'],['CTSh','ctsh'],['GOV','gov'],['CTL','ctl'],['GSV','gsv'],['CSW','csw'],['NSV','nsv']].map(([l,k])=>[l,o[k],c[k],D[k]??'']),['Nivel mm',o.levelMm,c.levelMm],['Temp °F',o.tempF,c.tempF],['API 60F',o.api60,c.api60],['BSW %',o.bsw,c.bsw]];
+      ...[['TOV','tov'],['FWV','fwv'],['CTSh','ctsh'],['GOV','gov'],['CTL','ctl'],['GSV','gsv'],['CSW','csw'],['NSV','nsv']].map(([l,k])=>[l,o[k],c[k],D[k]??'']),['Nivel mm',o.levelMm,c.levelMm],['Temp °F',o.tempF,c.tempF],['API 60F',o.api60,c.api60],['BSW %',o.bsw,c.bsw],[],['Generado con Oil Static Measure · © 2026 Juan Cohen'],['Herramienta de apoyo: valide los resultados contra su procedimiento y la liquidación oficial.']];
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(res),'Resumen');
     if(calc.pr){const p=calc.pr;const v=[['Binomio','Vol. programado','Fracción','GOV prorrateo','GSV prorrateo','NSV prorrateo','GOV ajustado','GSV ajustado','NSV ajustado','%BSW'],...p.rows.map(r=>[r.id,r.vol,r.f,r.govP,r.gsvP,r.nsvP,r.govA,r.gsvA,r.nsvA,r.bswA]),
       ['Σ',p.sumVol,'','','','',p.sums.gov.ajustado,p.sums.gsv.ajustado,p.sums.nsv.ajustado],['Total despacho','','','','','',D.gov,D.gsv,D.nsv],['Cuadra',p.ok?'SÍ':'NO']];XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(v),'Carrotanques')}
