@@ -646,11 +646,12 @@ function viewGuia(){$('#app').innerHTML=`<section class="card guide"><h2>Guía d
  <h3>Flujo normal</h3><ol><li>En <b>Tanques y aforo</b> cargue la tabla del tanque (nivel en mm, volumen en bbl, m³ o galones) una sola vez.</li><li>En <b>Despacho</b> elija tanque y producto. Ingrese dos lecturas de nivel (una tercera solo si las dos primeras difieren) y tres lecturas de temperatura, de apertura y de cierre, el nivel de agua libre y la gravedad API a 60 °F. El %BSW es uno solo para toda la operación y se ingresa en el encabezado.</li><li>Agregue los binomios del bache con su volumen programado, que es el máximo a cargar en ese vehículo. Puede pegar desde Excel o importar un archivo. Al elegir un binomio conocido se propone la media de sus últimos 5 cargues.</li><li>Revise el chequeo: las tres sumas (GOV, GSV, NSV) deben cuadrar con el despacho. Guarde la operación y exporte el reporte.</li></ol>
  <h3>Secuencia de cálculo</h3><div class="formula">Nivel adoptado (API MPMS 3): 1.ª = 2.ª → 1.ª; 2.ª = 3.ª → 2.ª; si no, promedio. Entero en mm.
 TOV  = aforo(nivel)                         2 decimales (interpolación lineal entre puntos)
-GOV  = (TOV − FWV) · CTSh + FRA             2 decimales
 CTSh = 1 + 2·α·(Tsh−Tbase) + α²·(Tsh−Tbase)²   5 decimales (API 12.1.1)
 CTL  = Tabla 6A/24A (API 11.1-2004, crudo)  5 decimales
-GSV  = GOV · CTL                            2 decimales
-NSV  = GSV · (1 − %BSW/100)                 2 decimales
+Cálculo en cadena (API 12.1.1 §14.2): solo se redondea el resultado final.
+GOV  = (TOV − FWV) · CTSh + FRA             se informa a 2 dec.; el valor sin redondear sigue en la cadena
+GSV  = [(TOV − FWV) · CTSh + FRA] · CTL     2 decimales
+NSV  = [(TOV − FWV) · CTSh + FRA] · CTL · CSW   2 decimales
 Despacho (API 12.1.1 §15.2.1, tanques de arrendamiento):
   ΔTOV, ΔGOV, ΔGSV = |apertura − cierre|
   CSW = (100 − %BSW)/100 (5 dec.)  con el %BSW único de la operación (el mismo en apertura y cierre)
