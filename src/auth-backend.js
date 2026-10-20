@@ -131,16 +131,29 @@
       const u = await call('/auth/v1/user');
       for (const f of (u.factors || []).filter((x) => x.status !== 'verified')) await call('/auth/v1/factors/' + f.id, { method: 'DELETE' });
       const f = await call('/auth/v1/factors', { method: 'POST', body: { factor_type: 'totp', friendly_name: 'OSM ' + new Date().toISOString().slice(0, 16), issuer: 'Oil Static Measure' } });
-      showGate(`<form id="agMfa" class="ag-form" novalidate data-f="${esc(f.id)}"><p><b>Active el segundo factor (obligatorio).</b> Escanee el código con su aplicación autenticadora y escriba el código que muestra.</p>
-        <img class="ag-qr" id="agQr" alt="Código QR para la aplicación autenticadora">
-        <p class="note">¿No puede escanear? Clave: <code class="ag-secret">${esc(f.totp.secret)}</code></p>
-        ${field('agCode', 'Código de 6 dígitos', 'text', 'inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required')}
-        <button class="b p" id="agGo" type="submit">Activar y continuar</button></form><div class="ag-links"><button class="b s" data-ag="logout" type="button">Cancelar</button></div>`);
+      // En el celular no se puede escanear un QR de la misma pantalla: primero el botón que abre
+      // la aplicación autenticadora y la clave para copiar; el QR queda para quien entra desde un computador.
+      const phone = matchMedia('(pointer: coarse)').matches;
+      const key = String(f.totp.secret || ''), grouped = key.replace(/(.{4})/g, '$1 ').trim();
+      const qr = `<details class="ag-alt" ${phone ? '' : 'open'}><summary>${phone ? 'Usar código QR (desde otro dispositivo)' : 'Escanear código QR con el celular'}</summary><img class="ag-qr" id="agQr" alt="Código QR para la aplicación autenticadora"></details>`;
+      showGate(`<form id="agMfa" class="ag-form" novalidate data-f="${esc(f.id)}">
+        <p><b>Active el segundo factor (obligatorio).</b> Necesita una aplicación autenticadora en su celular: Google Authenticator, Microsoft Authenticator o Authy.</p>
+        <div class="ag-step"><span class="ag-n">1</span><div>Agregue Oil Static Measure a su aplicación autenticadora.
+          ${phone && f.totp.uri ? `<a class="b p ag-open" id="agOpen" href="${esc(f.totp.uri)}">Abrir en mi aplicación autenticadora</a>` : ''}
+          <div class="ag-keybox"><span class="note">${phone && f.totp.uri ? 'Si el botón no abre la aplicación, agréguela a mano con esta clave:' : 'O agréguela a mano con esta clave:'}</span>
+            <code class="ag-secret" id="agKey">${esc(grouped)}</code>
+            <button class="b s" type="button" id="agCopy">Copiar clave</button></div>
+          <span class="note">A mano: en la aplicación toque <b>+</b> → <b>Ingresar clave de configuración</b> (o "Introducir una clave"). Nombre de la cuenta: Oil Static Measure. Tipo: basada en tiempo.</span>
+          ${phone ? '' : qr}</div></div>
+        <div class="ag-step"><span class="ag-n">2</span><div style="flex:1;min-width:0">Vuelva aquí y escriba el código de 6 dígitos que muestra la aplicación.
+          ${field('agCode', 'Código de 6 dígitos', 'text', 'inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required')}</div></div>
+        <button class="b p" id="agGo" type="submit">Activar y continuar</button>${phone ? qr : ''}</form><div class="ag-links"><button class="b s" data-ag="logout" type="button">Cancelar</button></div>`);
       document.getElementById('agQr').src = qrSrc(f.totp.qr_code);
+      enrollKey = key;
       pendingThen = then;
     } catch (e) { showGate(''); msg(e.message); }
   }
-  let pendingThen = null;
+  let pendingThen = null, enrollKey = '';
   // Supabase entrega el QR como SVG puro ("<?xml …><svg …>"), sin prefijo data:.
   // Se acepta también data:image/svg+xml (codificado o no) y se sirve como Blob propio.
   function qrSrc(q) {
@@ -307,6 +320,13 @@
   document.addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
     if (b.id === 'osmLogout') return logout('Sesión cerrada.');
+    if (b.id === 'agCopy') {
+      const el = document.getElementById('agKey');
+      const done = () => { b.textContent = 'Clave copiada'; setTimeout(() => (b.textContent = 'Copiar clave'), 2500); };
+      const sel = () => { const r = document.createRange(); r.selectNodeContents(el); const w = getSelection(); w.removeAllRanges(); w.addRange(r); b.textContent = 'Clave seleccionada: cópiela'; };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(enrollKey).then(done, sel); else sel();
+      return;
+    }
     if (!gate || !gate.contains(b)) return;
     const a = b.dataset.ag;
     if (a === 'signup') vSignup(); if (a === 'forgot') vForgot(); if (a === 'login') vLogin();
