@@ -3,6 +3,7 @@
 // © 2026 Juan Cohen. Todos los derechos reservados.
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { transform } from 'esbuild';
+import { createHash } from 'node:crypto';
 
 const BANNER = '/*! Oil Static Measure · © 2026 Juan Cohen. Todos los derechos reservados. Prohibida su copia o distribución sin autorización escrita. */';
 const HTML_NOTICE = '<!-- Oil Static Measure · © 2026 Juan Cohen. Todos los derechos reservados. -->';
@@ -36,6 +37,27 @@ html = await replaceAsync(html, /<style>([\s\S]*?)<\/style>/g, async (_all, css)
   const out = await transform(css, { loader: 'css', minify: true, legalComments: 'none' });
   return `<style>${out.code.trim()}</style>`;
 });
+
+// Política de seguridad de contenido: solo se ejecutan los scripts en línea de este
+// archivo (por su huella SHA-256) y la librería de Excel fijada a una versión exacta.
+// Las conexiones de red solo pueden ir al proyecto de Supabase.
+const SUPABASE = 'https://aqpbthffuoegawxswwhf.supabase.co';
+const hashes = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+  .map((m) => `'sha256-${createHash('sha256').update(m[1], 'utf8').digest('base64')}'`);
+const CSP = [
+  "default-src 'none'",
+  `script-src ${hashes.join(' ')} https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js`,
+  "style-src 'unsafe-inline' https://fonts.googleapis.com",
+  'font-src https://fonts.gstatic.com',
+  "img-src 'self' data: blob:",
+  `connect-src ${SUPABASE}`,
+  "base-uri 'none'",
+  "form-action 'none'",
+  "object-src 'none'",
+  "manifest-src 'self'"
+].join('; ');
+if (!/<meta charset="utf-8">/.test(html)) throw new Error('No se encontró <meta charset> para insertar la CSP');
+html = html.replace('<meta charset="utf-8">', `<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${CSP}">`);
 
 html = html.replace(/^<!doctype html>/i, `<!doctype html>\n${HTML_NOTICE}`);
 

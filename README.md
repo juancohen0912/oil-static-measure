@@ -22,6 +22,20 @@ Oleoducto (botón "Cargar ejemplo"): 3 puntos de entrada, 2 de salida, 4 remiten
 
 © 2026 Juan Cohen. Todos los derechos reservados. Software propietario: ver `LICENSE`. No se autoriza su copia, modificación ni distribución sin permiso escrito del autor.
 
+## Seguridad (backend en Supabase)
+
+- **Solo por invitación.** Un disparador en `auth.users` rechaza cualquier registro sin invitación vigente. La membresía se crea solo cuando el invitado confirma su correo, con el nombre que puso quien invitó (no el que escribe el usuario).
+- **Segundo factor obligatorio (TOTP).** Una política restrictiva en todas las tablas exige sesión `aal2`; con solo la contraseña no se ve ni se escribe nada.
+- **Aislamiento por organización, rol y licencia** con Row Level Security. El rol `anon` no tiene permisos. Roles: visor, analista, administrador, propietario; nadie asigna un rol mayor que el propio.
+- **El administrador de la plataforma** gestiona organizaciones y licencias, pero no puede leer los datos de organizaciones de las que no es miembro.
+- **Anti-suplantación y trazabilidad.** El servidor fija usuario, nombre y fecha en cada cambio. La auditoría es una cadena SHA-256 de solo inserción, y cada documento guarda su versión anterior en un historial inalterable. Un período cerrado no se borra.
+- **Navegador.** No se usan librerías de terceros para la sesión. El token de acceso vive en memoria y el de renovación en `sessionStorage`. La sesión se cierra tras 30 minutos de inactividad.
+  - CSP con la huella SHA-256 de cada script y conexiones solo al proyecto de Supabase.
+  - Cabeceras HSTS, `frame-ancestors 'none'` y `X-Frame-Options`.
+- El esquema está en `supabase/migrations/`. La clave publicable del sitio es pública por diseño. La clave de servicio nunca va en el código.
+
+Sin cuenta, "Ver demostración" funciona solo en el navegador del visitante, con datos de ejemplo y sin acceso a la base.
+
 ## Aviso
 
-Los datos se guardan en el navegador de cada usuario. No hay autenticación ni base de datos compartida en esta versión. Valide los resultados con su procedimiento y las ediciones vigentes de las normas API/ASTM antes de uso comercial o fiscal.
+Valide los resultados con su procedimiento y las ediciones vigentes de las normas API/ASTM antes de uso comercial o fiscal.
