@@ -1241,14 +1241,28 @@ Cuadre de cierre       ΣΔSaldos = ΔInventario + PNI asumida por el transporta
       for (const f of (u.factors || []).filter((x) => x.status !== 'verified')) await call('/auth/v1/factors/' + f.id, { method: 'DELETE' });
       const f = await call('/auth/v1/factors', { method: 'POST', body: { factor_type: 'totp', friendly_name: 'OSM ' + new Date().toISOString().slice(0, 16), issuer: 'Oil Static Measure' } });
       showGate(`<form id="agMfa" class="ag-form" novalidate data-f="${esc(f.id)}"><p><b>Active el segundo factor (obligatorio).</b> Escanee el código con su aplicación autenticadora y escriba el código que muestra.</p>
-        <img class="ag-qr" alt="Código QR para la aplicación autenticadora" src="${esc(f.totp.qr_code)}">
+        <img class="ag-qr" id="agQr" alt="Código QR para la aplicación autenticadora">
         <p class="note">¿No puede escanear? Clave: <code class="ag-secret">${esc(f.totp.secret)}</code></p>
         ${field('agCode', 'Código de 6 dígitos', 'text', 'inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required')}
         <button class="b p" id="agGo" type="submit">Activar y continuar</button></form><div class="ag-links"><button class="b s" data-ag="logout" type="button">Cancelar</button></div>`);
+      document.getElementById('agQr').src = qrSrc(f.totp.qr_code);
       pendingThen = then;
     } catch (e) { showGate(''); msg(e.message); }
   }
   let pendingThen = null;
+  // El QR llega como "data:image/svg+xml;utf-8,<svg…>" sin codificar: un "#" del SVG
+  // corta la URL y la imagen sale rota. Se convierte en un Blob propio.
+  function qrSrc(q) {
+    try {
+      const i = q.indexOf(','), head = q.slice(0, i);
+      if (/^data:image\/svg\+xml/.test(head)) {
+        let svg = q.slice(i + 1);
+        if (/;base64/i.test(head)) svg = atob(svg); else if (/%3C/i.test(svg.slice(0, 12))) svg = decodeURIComponent(svg);
+        return URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+      }
+    } catch (e) {}
+    return q;
+  }
 
   /* ---------------- Flujo posterior al login ---------------- */
   async function afterPassword() {
