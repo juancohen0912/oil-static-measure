@@ -141,18 +141,19 @@
     } catch (e) { showGate(''); msg(e.message); }
   }
   let pendingThen = null;
-  // El QR llega como "data:image/svg+xml;utf-8,<svg…>" sin codificar: un "#" del SVG
-  // corta la URL y la imagen sale rota. Se convierte en un Blob propio.
+  // Supabase entrega el QR como SVG puro ("<?xml …><svg …>"), sin prefijo data:.
+  // Se acepta también data:image/svg+xml (codificado o no) y se sirve como Blob propio.
   function qrSrc(q) {
+    let svg = String(q || '').trim();
     try {
-      const i = q.indexOf(','), head = q.slice(0, i);
-      if (/^data:image\/svg\+xml/.test(head)) {
-        let svg = q.slice(i + 1);
-        if (/;base64/i.test(head)) svg = atob(svg); else if (/%3C/i.test(svg.slice(0, 12))) svg = decodeURIComponent(svg);
-        return URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+      if (/^data:image\/svg\+xml/i.test(svg)) {
+        const i = svg.indexOf(','), head = svg.slice(0, i); svg = svg.slice(i + 1);
+        if (/;base64/i.test(head)) svg = atob(svg); else if (/^%3C/i.test(svg)) svg = decodeURIComponent(svg);
       }
-    } catch (e) {}
-    return q;
+      if (!/<svg[\s>]/i.test(svg)) return '';
+      if (!/<svg[^>]*\sxmlns=/i.test(svg)) svg = svg.replace(/<svg/i, '<svg xmlns="http://www.w3.org/2000/svg"');
+      return URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));
+    } catch (e) { return ''; }
   }
 
   /* ---------------- Flujo posterior al login ---------------- */
