@@ -68,9 +68,10 @@ function run(file) {
   assert.equal(px.t0, 142.5, 'T equivalente del despacho');
   assert.equal(px.ctl0, 0.96858, 'CTL del despacho a T equivalente');
   checkTickets(E, DX, px, 'Ctks_Prorrateo');
-  const pw = E.prorate(DX, placas, { tMaxDev: 1.0 });
-  checkTickets(E, DX, pw, 'Ctks_Prorrateo ±1 °F');
-  assert.equal(pw.tickets, placas.length, 'con ±1,0 °F todos los tiquetes deben cuadrar sin ajuste');
+  assert.equal(px.tMaxDev, 1, 'desviación máxima de T por defecto: ±1,0 °F');
+  assert.equal(px.tickets, placas.length, 'con ±1,0 °F (defecto) todos los tiquetes deben cuadrar sin ajuste');
+  const pn = E.prorate(DX, placas, { tMaxDev: 0.5 });
+  checkTickets(E, DX, pn, 'Ctks_Prorrateo ±0,5 °F');
 
   // Estrés: baches aleatorios de 1 a 16 vehículos.
   let seed = 7; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);

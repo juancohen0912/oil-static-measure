@@ -226,7 +226,7 @@ footer.legal a{color:var(--accent)}
   //  2) T0 = temperatura (0,1 °F) cuyo CTL reproduce el CTL efectivo del despacho (GSV/GOV).
   //  3) Para cada placa se evalúan T = T0 ± k·0,1 °F y se elige, por programación dinámica, la
   //     combinación de menor Σ(T − T0)² (desviación repartida) cuyas sumas de GSV y NSV cuadran exactas.
-  //  4) Si ninguna combinación con |T − T0| ≤ tMaxDev (0,5 °F por defecto) cuadra, se ajusta el NSV (o, con un solo vehículo,
+  //  4) Si ninguna combinación con |T − T0| ≤ tMaxDev (1,0 °F por defecto) cuadra, se ajusta el NSV (o, con un solo vehículo,
   //     también el GSV) en ±0,01 por mayor residuo y la placa queda marcada "ajuste de cierre".
   // veh: [{id, vol, maxGov}]; D: resultado de E.dispatch (gov, gsv, nsv, csw, bswUsed, api60).
   E.tempForCTL = function (api60, ctl) {
@@ -290,8 +290,8 @@ footer.legal a{color:var(--accent)}
       const end = layer.get(withN ? TG + '|' + TN : String(TG));
       return end ? end.path.map((j, i) => Object.assign({}, opts[i][j])) : null;
     };
-    // Límite de desviación de temperatura por placa respecto de T0 (por defecto ±0,5 °F, configurable).
-    const tDev = opts && isFinite(opts.tMaxDev) && opts.tMaxDev >= 0 ? Math.min(Number(opts.tMaxDev), 3) : 0.5;
+    // Límite de desviación de temperatura por placa respecto de T0 (por defecto ±1,0 °F, configurable).
+    const tDev = opts && isFinite(opts.tMaxDev) && opts.tMaxDev >= 0 ? Math.min(Number(opts.tMaxDev), 3) : 1.0;
     const KMAX = Math.round(tDev * 10);
     const Ks = [1, 2, 3, 5, 10, 20, 30].filter((k) => k < KMAX).concat(KMAX);
     let pick = null, level = 'exacto';
@@ -1644,12 +1644,12 @@ function inp(label,path,o={}){const v=getPath(cur,path)??'';
 
 /* ---------- Estado de la operación ---------- */
 function blankSide(){return {lv:['','',''],fwl:'0',ref:'',tv:['','',''],amb:'',api:''}}
-function demoOp(){return {id:'',rev:0,fecha:today(),orden:'DSP-0001',tankId:'DEMO',product:'Petróleo crudo',sameQ:true,fra:'0',tol:'0.5',tdev:'0.5',bsw:'0.35',note:'',
+function demoOp(){return {id:'',rev:0,fecha:today(),orden:'DSP-0001',tankId:'DEMO',product:'Petróleo crudo',sameQ:true,fra:'0',tol:'0.5',tdev:'1.0',bsw:'0.35',note:'',
   open:{lv:['10420','10420','10420'],fwl:'0',ref:'13500',tv:['152.8','153.4','154.0'],amb:'',api:'21.3'},
   close:{lv:['9790','9790','9790'],fwl:'0',ref:'13500',tv:['152.3','152.9','153.5'],amb:'',api:'21.3'},
   veh:DEMO_VEH.map(v=>({key:v.key,vol:String(v.loads[0].vol),max:String(v.maxGov)})),demo:true}}
 const fixBsw=c=>{if(c.bsw===undefined||c.bsw==='')c.bsw=c.open?.bsw||c.close?.bsw||'';return c};
-function newOp(){return {id:'',rev:0,fecha:today(),orden:'',tankId:'',product:'',sameQ:true,fra:'0',tol:'0.5',tdev:'0.5',bsw:'',note:'',open:blankSide(),close:blankSide(),veh:[{key:'',vol:'',max:''}]}}
+function newOp(){return {id:'',rev:0,fecha:today(),orden:'',tankId:'',product:'',sameQ:true,fra:'0',tol:'0.5',tdev:'1.0',bsw:'',note:'',open:blankSide(),close:blankSide(),veh:[{key:'',vol:'',max:''}]}}
 let cur=demoOp(), tab='despacho', calc=null;
 
 /* ---------- Pestañas ---------- */
@@ -1736,7 +1736,7 @@ function recalc(){
   $('#resN').innerHTML=D?`Despacho según API MPMS 12.1.1 §15.2.1 (tanques de arrendamiento): GOV, GSV = |apertura − cierre|; <b>NSV = ΔGSV × CSW</b> = ${fmt(D.gsv)} × ${fmt(D.csw,5)} (BSW ${fmt(D.bswUsed,3)} %). Referencia: NSV apertura − NSV cierre = ${fmt(D.nsvDiff)} bbl.`:'';
   // Vehículos
   let pr=null;const vehs=cur.veh.map((v,i)=>({id:v.key||('#'+(i+1)),vol:num(v.vol)||0,maxGov:0}));
-  if(D&&D.gov>0&&vehs.some(v=>v.vol>0)){try{pr=E.prorate(D,vehs,{tMaxDev:isNaN(num(cur.tdev))?0.5:num(cur.tdev)})}catch(e){errs.push(e.message)}}
+  if(D&&D.gov>0&&vehs.some(v=>v.vol>0)){try{pr=E.prorate(D,vehs,{tMaxDev:isNaN(num(cur.tdev))?1.0:num(cur.tdev)})}catch(e){errs.push(e.message)}}
   if(D&&!cur.sameQ&&o&&c&&o.api60!==c.api60)warns.push(`La API de apertura (${fmt(o.api60,1)}) y la de cierre (${fmt(c.api60,1)}) difieren: en los carrotanques se reporta la API de apertura, que es la del producto despachado.`);
   calc.pr=pr;
   cur.veh.forEach((v,i)=>{const r=pr&&pr.rows.find(x=>x.id===(v.key||('#'+(i+1))));const set=(id,h)=>{const e=$('#'+id+i);if(e)e.innerHTML=h};
