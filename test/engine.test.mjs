@@ -73,26 +73,31 @@ function run(file) {
   const pn = E.prorate(DX, placas, { tMaxDev: 0.5 });
   checkTickets(E, DX, pn, 'Ctks_Prorrateo ±0,5 °F');
 
-  // Modo Lite: mismos totales ingresados a mano (tiquete del tanque) → mismo prorrateo.
-  const L = E.liteDispatch({ gov: 1985.08, gsv: 1922.71, nsv: 1916.26, api60: 17.2, bsw: 0.336, tempF: 138.3 });
+  // Modo Lite: solo volúmenes, API y %BSW; T del líquido = T equivalente y su CTL.
+  const L = E.liteDispatch({ gov: 1985.08, gsv: 1922.71, nsv: 1916.26, api60: 17.2, bsw: 0.336 });
   assert.ok(L.ok, 'Lite: datos válidos');
   assert.equal(L.csw, 0.99664, 'Lite: CSW');
   assert.equal(L.ctl, 0.96858, 'Lite: CTL efectivo');
   assert.equal(L.tEq, 142.5, 'Lite: T equivalente');
-  assert.equal(L.warn.length, 1, 'Lite: solo alerta de CTL efectivo ≠ CTL a 138,3 °F (NSV dentro de 0,01)');
+  assert.equal(L.ctlEq, 0.96858, 'Lite: CTL Tabla 6A a la T equivalente');
+  assert.equal(L.warn.length, 0, 'Lite: sin alertas (NSV dentro de 0,01 y CTL exacto a 142,5 °F)');
   const pl = E.prorate(L, placas);
-  checkTickets(E, Object.assign({}, L), pl, 'Lite Ctks_Prorrateo');
+  checkTickets(E, L, pl, 'Lite Ctks_Prorrateo');
+  assert.equal(pl.t0, L.tEq, 'Lite: la T del despacho del prorrateo es la T equivalente');
   assert.equal(Math.round(pl.sums.nsv.ajustado * 100), 191626, 'Lite: Σ NSV = NSV ingresado');
+  // Lite con los totales del caso README: T equivalente = la del prorrateo del modo completo
+  const LR = E.liteDispatch({ gov: D.gov, gsv: D.gsv, nsv: D.nsv, api60: 21.3, bsw: 0.35 });
+  assert.ok(LR.ok && LR.tEq === p.t0 && LR.ctlEq === p.ctl0, 'Lite README: misma T equivalente y CTL que el modo completo');
   // NSV ingresado con %BSW redondeado: alerta y cierre exacto de todos modos
-  const L2 = E.liteDispatch({ gov: 1985.08, gsv: 1922.71, nsv: 1915.20, api60: 17.2, bsw: 0.336, tempF: 142.5 });
+  const L2 = E.liteDispatch({ gov: 1985.08, gsv: 1922.71, nsv: 1915.20, api60: 17.2, bsw: 0.336 });
   assert.ok(L2.ok && L2.warn.some((w) => /BSW implícito/.test(w)), 'Lite: alerta por NSV ≠ GSV×CSW');
   const pl2 = E.prorate(L2, placas);
   assert.ok(pl2.ok, 'Lite: Σ cuadra aunque el NSV ingresado no sea GSV×CSW');
   assert.ok(pl2.rows.every((r) => r.bswA === 0.336 && r.apiA === 17.2), 'Lite: BSW y API únicos');
   // Validaciones
-  assert.ok(!E.liteDispatch({ gov: 100, gsv: 99, nsv: 100, api60: 17, bsw: 0.5, tempF: 100 }).ok, 'Lite: NSV > GSV es error');
-  assert.ok(!E.liteDispatch({ gov: 100, gsv: 99, nsv: 98, api60: 120, bsw: 0.5, tempF: 100 }).ok, 'Lite: API fuera de rango');
-  assert.ok(!E.liteDispatch({ gov: 100, gsv: 99, nsv: 98, api60: 17, bsw: 0.5, tempF: 400 }).ok, 'Lite: T fuera de rango');
+  assert.ok(!E.liteDispatch({ gov: 100, gsv: 99, nsv: 100, api60: 17, bsw: 0.5 }).ok, 'Lite: NSV > GSV es error');
+  assert.ok(!E.liteDispatch({ gov: 100, gsv: 99, nsv: 98, api60: 120, bsw: 0.5 }).ok, 'Lite: API fuera de rango');
+  assert.ok(!E.liteDispatch({ gov: 100, gsv: 99, nsv: 98, api60: 17, bsw: 120 }).ok, 'Lite: BSW fuera de rango');
 
   // Estrés: baches aleatorios de 1 a 16 vehículos.
   let seed = 7; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);

@@ -215,35 +215,36 @@ footer.legal a{color:var(--accent)}
   };
 
   // --- Despacho Lite: el operador ingresa directamente los totales del despacho ---
-  // in: {gov, gsv, nsv, api60, bsw, tempF} (bbl, °API a 60 °F, %, °F del producto despachado).
+  // in: {gov, gsv, nsv, api60, bsw} (bbl, °API a 60 °F, %). Solo volúmenes y calidad: no se ingresa temperatura.
   // Devuelve el mismo objeto que E.dispatch (gov, gsv, nsv, csw, bswUsed, api60) para el prorrateo,
   // más los factores de verificación. Los volúmenes de entrada mandan: no se recalculan.
   //  · CSW = (100 − %BSW)/100 a 5 decimales (API MPMS 12.1.1); NSV esperado = ROUND(GSV·CSW, 2).
-  //  · CTL Tabla 6A a la temperatura ingresada (API MPMS 11.1) frente al CTL efectivo GSV/GOV,
-  //    que puede incluir CTSh y la diferencia de temperatura entre apertura y cierre.
+  //  · Temperatura del líquido = temperatura equivalente: la T (0,1 °F) cuyo CTL de la Tabla 6A
+  //    (API MPMS 11.1) con la API ingresada reproduce el CTL efectivo GSV/GOV del despacho.
+  //  · CTL reportado = Tabla 6A(API, T equivalente), 5 decimales.
   E.liteDispatch = function (p) {
     const err = [], warn = [];
-    const gov = Number(p.gov), gsv = Number(p.gsv), nsv = Number(p.nsv), api = Number(p.api60), bsw = Number(p.bsw), t = Number(p.tempF);
+    const gov = Number(p.gov), gsv = Number(p.gsv), nsv = Number(p.nsv), api = Number(p.api60), bsw = Number(p.bsw);
     if (!(gov > 0)) err.push('GOV: ingrese un volumen mayor que cero.');
     if (!(gsv > 0)) err.push('GSV: ingrese un volumen mayor que cero.');
     if (!(nsv > 0)) err.push('NSV: ingrese un volumen mayor que cero.');
     if (!(api >= 0 && api <= 100)) err.push('API a 60 °F fuera del rango de la Tabla 6A (0–100 °API).');
     if (!(bsw >= 0 && bsw < 100)) err.push('%BSW debe estar entre 0 y 100.');
-    if (!(t >= -58 && t <= 302)) err.push('Temperatura fuera del rango de la Tabla 6A (−58 a 302 °F).');
     if (gov > 0 && gsv > 0 && Math.abs(gsv / gov - 1) > 0.15) err.push('GSV/GOV = ' + R(gsv / gov, 5) + ': fuera de un rango físico razonable (0,85–1,15). Revise los volúmenes.');
     if (gsv > 0 && nsv > gsv) err.push('El NSV no puede ser mayor que el GSV.');
     if (err.length) return { ok: false, err, warn };
     const g2 = R(gov, 2), s2 = R(gsv, 2), n2 = R(nsv, 2);
     const csw = R((100 - bsw) / 100, 5), nsvExp = R(s2 * csw, 2);
-    const ctlEff = R(s2 / g2, 5), ctlT = E.CTL(api, t), tEq = E.tempForCTL(api, s2 / g2);
+    const ctlEff = R(s2 / g2, 5), tEq = E.tempForCTL(api, s2 / g2), ctlEq = E.CTL(api, tEq);
+    if (tEq <= -58 || tEq >= 302) return { ok: false, err: ['Con API ' + api + ' el CTL efectivo GSV/GOV (' + ctlEff + ') exige una temperatura fuera de la Tabla 6A (−58 a 302 °F). Revise la API o los volúmenes.'], warn };
     if (Math.abs(n2 - nsvExp) > 0.01) {
       const bswImp = R((1 - n2 / s2) * 100, 4);
       warn.push('El NSV ingresado (' + n2 + ') difiere de GSV × CSW = ' + s2 + ' × ' + csw + ' = ' + nsvExp + ' bbl. El %BSW implícito en los volúmenes es ' + bswImp + ' %. Los tiquetes se calculan con el %BSW ingresado y el NSV se ajusta a cero.');
     }
-    if (Math.abs(ctlEff - ctlT) > 0.0005)
-      warn.push('El CTL efectivo GSV/GOV (' + ctlEff + ') difiere del CTL de la Tabla 6A a ' + t + ' °F (' + ctlT + '); equivale a ' + tEq + ' °F. Puede deberse al CTSh o a temperaturas distintas en apertura y cierre: verifique los datos del tiquete del tanque.');
-    return { ok: true, err, warn, lite: true, gov: g2, gsv: s2, nsv: n2, csw, bswUsed: bsw, api60: api, tempF: t,
-      ctl: ctlEff, ctlT, tEq, nsvExp };
+    if (ctlEq !== ctlEff)
+      warn.push('Ninguna temperatura en pasos de 0,1 °F da exactamente el CTL efectivo GSV/GOV (' + ctlEff + '); la más cercana es ' + tEq + ' °F, con CTL ' + ctlEq + '. Los tiquetes por placa se ajustan con esa temperatura y las sumas cuadran igual.');
+    return { ok: true, err, warn, lite: true, gov: g2, gsv: s2, nsv: n2, csw, bswUsed: bsw, api60: api,
+      ctl: ctlEff, tEq, ctlEq, nsvExp };
   };
 
   // --- Prorrateo a carrotanques: tiquete consistente por placa ---
@@ -1677,12 +1678,12 @@ function inp(label,path,o={}){const v=getPath(cur,path)??'';
 
 /* ---------- Estado de la operación ---------- */
 function blankSide(){return {lv:['','',''],fwl:'0',ref:'',tv:['','',''],amb:'',api:''}}
-function demoOp(){return {id:'',rev:0,fecha:today(),orden:'DSP-0001',tankId:'DEMO',product:'Petróleo crudo',mode:'completo',lite:{gov:'',gsv:'',nsv:'',api:'',temp:'',tank:''},sameQ:true,fra:'0',tol:'0.5',tdev:'1.0',bsw:'0.35',note:'',
+function demoOp(){return {id:'',rev:0,fecha:today(),orden:'DSP-0001',tankId:'DEMO',product:'Petróleo crudo',mode:'completo',lite:{gov:'',gsv:'',nsv:'',api:'',tank:''},sameQ:true,fra:'0',tol:'0.5',tdev:'1.0',bsw:'0.35',note:'',
   open:{lv:['10420','10420','10420'],fwl:'0',ref:'13500',tv:['152.8','153.4','154.0'],amb:'',api:'21.3'},
   close:{lv:['9790','9790','9790'],fwl:'0',ref:'13500',tv:['152.3','152.9','153.5'],amb:'',api:'21.3'},
   veh:DEMO_VEH.map(v=>({key:v.key,vol:String(v.loads[0].vol),max:String(v.maxGov)})),demo:true}}
-const fixBsw=c=>{if(c.bsw===undefined||c.bsw==='')c.bsw=c.open?.bsw||c.close?.bsw||'';if(!c.lite)c.lite={gov:'',gsv:'',nsv:'',api:'',temp:'',tank:''};if(c.mode!=='lite')c.mode='completo';return c};
-function newOp(){return {id:'',rev:0,fecha:today(),orden:'',tankId:'',product:'',mode:'completo',lite:{gov:'',gsv:'',nsv:'',api:'',temp:'',tank:''},sameQ:true,fra:'0',tol:'0.5',tdev:'1.0',bsw:'',note:'',open:blankSide(),close:blankSide(),veh:[{key:'',vol:'',max:''}]}}
+const fixBsw=c=>{if(c.bsw===undefined||c.bsw==='')c.bsw=c.open?.bsw||c.close?.bsw||'';if(!c.lite)c.lite={gov:'',gsv:'',nsv:'',api:'',tank:''};if(c.mode!=='lite')c.mode='completo';return c};
+function newOp(){return {id:'',rev:0,fecha:today(),orden:'',tankId:'',product:'',mode:'completo',lite:{gov:'',gsv:'',nsv:'',api:'',tank:''},sameQ:true,fra:'0',tol:'0.5',tdev:'1.0',bsw:'',note:'',open:blankSide(),close:blankSide(),veh:[{key:'',vol:'',max:''}]}}
 let cur=demoOp(), tab='despacho', calc=null;
 
 /* ---------- Pestañas ---------- */
@@ -1713,8 +1714,8 @@ function vehRow(v,i){return `<tr data-i="${i}"><td class="t">${i+1}</td>
  <td class="t"><button class="b s" data-vdel="${i}" aria-label="Quitar fila ${i+1}">✕</button></td></tr>`}
 function liteForm(){return `<section class="card"><h3>Datos del despacho (Lite)</h3>
   <div class="grid">${inp('GOV · Volumen bruto observado','lite.gov',{u:'bbl'})}${inp('GSV · Volumen bruto estándar','lite.gsv',{u:'bbl'})}${inp('NSV · Volumen neto estándar','lite.nsv',{u:'bbl'})}
-   ${inp('Gravedad API a 60 °F','lite.api',{u:'°API'})}${inp('% BSW (S&W)','bsw',{u:'%'})}${inp('Temperatura del producto','lite.temp',{u:'°F'})}</div>
-  <div class="note">Sin tabla de aforo ni medidas: los volúmenes ingresados mandan. La app verifica que NSV ≈ GSV × CSW y compara GSV/GOV con el CTL de la Tabla 6A a la temperatura ingresada; luego prorratea a los carrotanques con el mismo método del modo completo.</div></section>`}
+   ${inp('Gravedad API a 60 °F','lite.api',{u:'°API'})}${inp('% BSW (S&W)','bsw',{u:'%'})}</div>
+  <div class="note">Sin tabla de aforo ni medidas: los volúmenes ingresados mandan. No se ingresa temperatura: la del líquido es la <b>temperatura equivalente</b>, la que con la API da en la Tabla 6A el CTL efectivo GSV/GOV, y se reporta con su CTL. La app verifica que NSV ≈ GSV × CSW y luego prorratea a los carrotanques con el mismo método del modo completo.</div></section>`}
 function viewDespacho(){confirmAl=false;const lite=cur.mode==='lite';
   $('#app').innerHTML=`<div id="toasts" class="msgs"></div>
   ${cur.demo?'<div class="msg info">Datos de Ejemplo, pulse "nueva operación" para sus datos de despacho.</div>':''}
@@ -1722,7 +1723,7 @@ function viewDespacho(){confirmAl=false;const lite=cur.mode==='lite';
    <button class="b" id="bNew">Nueva operación</button><button class="b p" id="bSave" ${S.canWrite?'':'disabled'}>Guardar operación</button></div>
    <div class="row" role="group" aria-label="Modo de captura" style="gap:6px"><span class="note" style="margin:0">Modo de captura:</span>
     <button class="b s ${lite?'':'p'}" data-mode="completo" aria-pressed="${!lite}" title="Medidas de apertura y cierre del tanque con su tabla de aforo">Completo</button>
-    <button class="b s ${lite?'p':''}" data-mode="lite" aria-pressed="${lite}" title="Solo los totales del despacho: GOV, GSV, NSV, API, %BSW y temperatura">Lite</button></div>
+    <button class="b s ${lite?'p':''}" data-mode="lite" aria-pressed="${lite}" title="Solo los totales del despacho: GOV, GSV, NSV, API y %BSW">Lite</button></div>
    <div class="grid">${inp('N.º de orden / despacho','orden',{txt:1})}${inp('Fecha','fecha',{txt:1,type:'date'})}
     ${lite?inp('Tanque (referencia, opcional)','lite.tank',{txt:1}):`<label class="f">Tanque (tabla de aforo)<select id="selTank" data-k="tankId"><option value="">— elegir —</option>${tankOpts()}</select></label>`}
     ${inp('Producto','product',{txt:1,list:'prodlist'})}${lite?'':inp('Ajuste techo flotante FRA','fra',{u:'bbl'})}${inp('Tolerancia programado vs bache','tol',{u:'%'})}${inp('Desviación máx. de T por placa','tdev',{u:'°F'})}${lite?'':inp('% BSW (S&W) de la operación','bsw',{u:'%'})}</div>
@@ -1775,16 +1776,16 @@ function fullCalc(warns,errs){const tank=getTank(cur.tankId);
   $('#resN').innerHTML=D?`Despacho según API MPMS 12.1.1 §15.2.1 (tanques de arrendamiento): GOV, GSV = |apertura − cierre|; <b>NSV = ΔGSV × CSW</b> = ${fmt(D.gsv)} × ${fmt(D.csw,5)} (BSW ${fmt(D.bswUsed,3)} %). Referencia: NSV apertura − NSV cierre = ${fmt(D.nsvDiff)} bbl.`:'';
 }
 function liteCalc(warns,errs){const L=cur.lite||{};
-  const filled=['gov','gsv','nsv','api','temp'].some(k=>String(L[k]??'').trim()!=='')||String(cur.bsw??'').trim()!=='';
-  const r=E.liteDispatch({gov:num(L.gov),gsv:num(L.gsv),nsv:num(L.nsv),api60:num(L.api),bsw:num(cur.bsw),tempF:num(L.temp)});
-  if(!r.ok){if(filled)r.err.forEach(e=>errs.push(e));else errs.push('Ingrese GOV, GSV, NSV, API, %BSW y temperatura del despacho.');calc={o:null,c:null,D:null}}
+  const filled=['gov','gsv','nsv','api'].some(k=>String(L[k]??'').trim()!=='')||String(cur.bsw??'').trim()!=='';
+  const r=E.liteDispatch({gov:num(L.gov),gsv:num(L.gsv),nsv:num(L.nsv),api60:num(L.api),bsw:num(cur.bsw)});
+  if(!r.ok){if(filled)r.err.forEach(e=>errs.push(e));else errs.push('Ingrese GOV, GSV, NSV, API y %BSW del despacho.');calc={o:null,c:null,D:null}}
   else{r.warn.forEach(w=>warns.push(w));calc={o:null,c:null,D:r}}
   const D=calc.D;
   const rows=[['GOV · Volumen bruto observado',D&&fmt(D.gov,2)],['GSV · Volumen bruto estándar',D&&fmt(D.gsv,2)],['CTL efectivo (GSV / GOV)',D&&fmt(D.ctl,5)],
-    [`CTL Tabla 6A a la temperatura ingresada${D?` (${fmt(D.tempF,1)} °F, API ${fmt(D.api60,1)})`:''}`,D&&fmt(D.ctlT,5)],['Temperatura equivalente del CTL efectivo (°F)',D&&fmt(D.tEq,1)],
+    [`Temperatura del líquido = T equivalente (calculada, °F)`,D&&fmt(D.tEq,1)],[`CTL Tabla 6A a la T equivalente${D?` (API ${fmt(D.api60,1)})`:''}`,D&&fmt(D.ctlEq,5)],
     ['CSW · Factor por agua y sedimento',D&&fmt(D.csw,5)],['NSV esperado = GSV × CSW',D&&fmt(D.nsvExp,2)],['NSV · Volumen neto estándar (ingresado)',D&&fmt(D.nsv,2)]];
   $('#resT').innerHTML=`<table><thead><tr><th class="t">Concepto</th><th>Despacho</th></tr></thead><tbody>`+rows.map(([l,v])=>`<tr><td class="t">${l}</td><td class="mono key">${v||'—'}</td></tr>`).join('')+`</tbody></table>`;
-  $('#resN').innerHTML=D?`Modo Lite: los volúmenes del despacho son los ingresados por el operador (tiquete del tanque). CSW = (100 − ${fmt(D.bswUsed,3)})/100 a 5 decimales (API MPMS 12.1.1); CTL de referencia según API MPMS 11.1, Tabla 6A.`:'';
+  $('#resN').innerHTML=D?`Modo Lite: los volúmenes del despacho son los ingresados por el operador (tiquete del tanque). La temperatura del líquido no se mide: es la temperatura equivalente, calculada para que el CTL de la Tabla 6A (API MPMS 11.1) con la API ${fmt(D.api60,1)} reproduzca GSV/GOV. CSW = (100 − ${fmt(D.bswUsed,3)})/100 a 5 decimales (API MPMS 12.1.1).`:'';
 }
 function recalc(){
   const warns=[],errs=[];calc={};
@@ -1869,8 +1870,8 @@ document.addEventListener('click',async e=>{const t=e.target.closest('button');i
    if(t.id==='bNew'){const m=cur.mode;cur=newOp();cur.mode=m;confirmDemo=false;viewDespacho()}
    if(t.dataset.mode&&t.dataset.mode!==cur.mode){cur.mode=t.dataset.mode;
      // al pasar a Lite sin datos, se copian los totales del cálculo completo (si existe) como punto de partida
-     if(cur.mode==='lite'&&calc?.D&&!calc.D.lite&&!['gov','gsv','nsv','api','temp'].some(k=>String(cur.lite[k]||'').trim())){const D=calc.D;
-       cur.lite={...cur.lite,gov:String(D.gov),gsv:String(D.gsv),nsv:String(D.nsv),api:String(D.api60??''),temp:calc.o?String(R(calc.o.tempF,1)):'',tank:cur.lite.tank||getTank(cur.tankId)?.name||''};
+     if(cur.mode==='lite'&&calc?.D&&!calc.D.lite&&!['gov','gsv','nsv','api'].some(k=>String(cur.lite[k]||'').trim())){const D=calc.D;
+       cur.lite={...cur.lite,gov:String(D.gov),gsv:String(D.gsv),nsv:String(D.nsv),api:String(D.api60??''),tank:cur.lite.tank||getTank(cur.tankId)?.name||''};
        toast('Se copiaron los totales del cálculo completo como punto de partida del modo Lite.','info')}
      audit('CAMBIAR_MODO_CAPTURA',cur.orden||'(sin orden)',cur.mode).catch(()=>{});viewDespacho()}
    if(t.id==='bSave')saveOp();
@@ -2007,7 +2008,7 @@ document.addEventListener('click',async e=>{const t=e.target.closest('button');i
   if(t.id==='exX'){if(!calc.D)return toast('Complete el cálculo antes de exportar.','warn');if(!window.XLSX)return toast('La librería de Excel no cargó; use CSV.','warn');
     const wb=XLSX.utils.book_new();const o=calc.o,c=calc.c,D=calc.D;
     const fn=stamp()+'.xlsx';const res=D.lite?[['Código de reporte',fn.replace('.xlsx','')],['Modo de captura','Lite (totales ingresados por el operador)'],['Orden',cur.orden],['Fecha',cur.fecha],['Tanque (referencia)',cur.lite.tank||''],['Producto',cur.product],['Usuario',S.me.name],[],['Concepto','Despacho'],
-      ['GOV',D.gov],['GSV',D.gsv],['NSV',D.nsv],['API 60F',D.api60],['BSW %',D.bswUsed],['Temperatura °F',D.tempF],['CTL efectivo GSV/GOV',D.ctl],['CTL Tabla 6A a la temperatura',D.ctlT],['T equivalente °F',D.tEq],['CSW',D.csw],['NSV esperado GSV×CSW',D.nsvExp],[],['Generado con Oil Static Measure · © 2026 Juan Cohen'],['Herramienta de apoyo: valide los resultados contra su procedimiento y la liquidación oficial.']]:[['Código de reporte',fn.replace('.xlsx','')],['Orden',cur.orden],['%BSW aplicado al despacho',D.bswUsed],['Fecha',cur.fecha],['Tanque',getTank(cur.tankId)?.name],['Producto',cur.product],['Usuario',S.me.name],[],['Concepto','Apertura','Cierre','Despacho'],
+      ['GOV',D.gov],['GSV',D.gsv],['NSV',D.nsv],['API 60F',D.api60],['BSW %',D.bswUsed],['CTL efectivo GSV/GOV',D.ctl],['Temperatura del líquido = T equivalente °F (calculada)',D.tEq],['CTL Tabla 6A a la T equivalente',D.ctlEq],['CSW',D.csw],['NSV esperado GSV×CSW',D.nsvExp],[],['Generado con Oil Static Measure · © 2026 Juan Cohen'],['Herramienta de apoyo: valide los resultados contra su procedimiento y la liquidación oficial.']]:[['Código de reporte',fn.replace('.xlsx','')],['Orden',cur.orden],['%BSW aplicado al despacho',D.bswUsed],['Fecha',cur.fecha],['Tanque',getTank(cur.tankId)?.name],['Producto',cur.product],['Usuario',S.me.name],[],['Concepto','Apertura','Cierre','Despacho'],
       ...[['TOV','tov'],['FWV','fwv'],['CTSh','ctsh'],['GOV','gov'],['CTL','ctl'],['GSV','gsv'],['CSW','csw'],['NSV','nsv']].map(([l,k])=>[l,o[k],c[k],D[k]??'']),['Nivel mm',o.levelMm,c.levelMm],['Temp °F',o.tempF,c.tempF],['API 60F',o.api60,c.api60],['BSW %',o.bsw,c.bsw],[],['Generado con Oil Static Measure · © 2026 Juan Cohen'],['Herramienta de apoyo: valide los resultados contra su procedimiento y la liquidación oficial.']];
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(res),'Resumen');
     if(calc.pr){const p=calc.pr;const v=[['Binomio','Vol. programado','Fracción','GOV prorrateo','GSV prorrateo','NSV prorrateo','GOV ajustado','GSV ajustado','NSV ajustado','%BSW','API @60 °F','T equivalente °F','CTL','CSW','Ajuste de cierre'],...p.rows.map(r=>[r.id,r.vol,r.f,r.govP,r.gsvP,r.nsvP,r.govA,r.gsvA,r.nsvA,r.bswA,r.apiA,r.tA,r.ctlA,r.cswA,r.adj||'']),
@@ -2037,7 +2038,7 @@ document.addEventListener('click',async e=>{const t=e.target.closest('button');i
 /* ---------- Guía ---------- */
 function viewGuia(){$('#app').innerHTML=`<section class="card guide"><h2>Guía de operación</h2>
  <h3>Flujo normal</h3><ol><li>En <b>Tanques y aforo</b> cargue la tabla del tanque (nivel en mm, volumen en bbl, m³ o galones) una sola vez.</li><li>En <b>Despacho</b> elija tanque y producto. Ingrese dos lecturas de nivel (una tercera solo si las dos primeras difieren) y tres lecturas de temperatura, de apertura y de cierre, el nivel de agua libre y la gravedad API a 60 °F. El %BSW es uno solo para toda la operación y se ingresa en el encabezado.</li><li>Agregue los binomios del bache con su volumen programado, que es el máximo a cargar en ese vehículo. Puede pegar desde Excel o importar un archivo. Al elegir un binomio conocido se propone la media de sus últimos 5 cargues.</li><li>Revise el chequeo: las tres sumas (GOV, GSV, NSV) deben cuadrar con el despacho. Guarde la operación y exporte el reporte.</li></ol>
- <h3>Modo Lite</h3><p>Para cuando el operador ya tiene los totales del despacho (por ejemplo, del tiquete del tanque) y no necesita ingresar medidas ni tabla de aforo. En <b>Despacho</b> pulse <b>Lite</b> e ingrese solo GOV, GSV, NSV, API a 60 °F, %BSW y temperatura. La app verifica que NSV ≈ GSV × CSW y compara GSV/GOV con el CTL de la Tabla 6A a esa temperatura; las diferencias se muestran como alertas, nunca cambian los volúmenes ingresados. El prorrateo a carrotanques, los chequeos, el guardado y los exportes funcionan igual que en el modo completo.</p>
+ <h3>Modo Lite</h3><p>Para cuando el operador ya tiene los totales del despacho (por ejemplo, del tiquete del tanque) y no necesita ingresar medidas ni tabla de aforo. En <b>Despacho</b> pulse <b>Lite</b> e ingrese solo GOV, GSV, NSV, API a 60 °F y %BSW. La temperatura del líquido no se ingresa: es la temperatura equivalente, la que con esa API da en la Tabla 6A el CTL efectivo GSV/GOV, y se reporta junto con ese CTL. La app verifica que NSV ≈ GSV × CSW; las diferencias se muestran como alertas, nunca cambian los volúmenes ingresados. El prorrateo a carrotanques, los chequeos, el guardado y los exportes funcionan igual que en el modo completo.</p>
  <h3>Secuencia de cálculo</h3><div class="formula">Nivel adoptado (API MPMS 3): 1.ª = 2.ª → 1.ª; 2.ª = 3.ª → 2.ª; si no, promedio. Entero en mm.
 TOV  = aforo(nivel)                         2 decimales (interpolación lineal entre puntos)
 CTSh = 1 + 2·α·(Tsh−Tbase) + α²·(Tsh−Tbase)²   5 decimales (API 12.1.1)
