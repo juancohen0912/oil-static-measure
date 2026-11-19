@@ -18,6 +18,21 @@ function load(file) {
   return { E: ctx.OilEngine, rows: ctx.__ROWS };
 }
 
+function checkTickets(E, D, p, tag) {
+  assert.ok(p.ok, tag + ': Σ GOV, GSV y NSV deben cuadrar con el despacho');
+  for (const k of ['gov', 'gsv', 'nsv'])
+    assert.equal(Math.round(p.rows.reduce((s, r) => s + r[k + 'A'], 0) * 100), Math.round(D[k] * 100), tag + ': Σ ' + k);
+  for (const r of p.rows) {
+    assert.equal(r.bswA, D.bswUsed, tag + ': %BSW igual en todas las placas');
+    assert.equal(r.apiA, D.api60, tag + ': API igual en todas las placas');
+    assert.equal(r.ctlA, E.CTL(D.api60, r.tA), tag + ': CTL = Tabla 6A(API, T equivalente)');
+    assert.ok(Math.abs(r.tA - p.t0) <= p.tMaxDev + 1e-9, tag + ': desviación de T dentro del límite');
+    if (!r.adj) assert.ok(r.ticketOk, tag + ': ' + r.id + ' tiquete reproducible');
+    else assert.ok(Math.abs(r.chkG) <= 0.01 && Math.abs(r.chkN) <= 0.01, tag + ': ajuste de cierre ≤ 0,01');
+    if (!/gsv/.test(r.adj)) assert.equal(r.chkG, 0, tag + ': GSV = GOV×CTL sin ajuste');
+  }
+}
+
 function run(file) {
   const { E, rows } = load(file);
   const tank = { table: rows, alpha: 6.2e-6, tBase: 60 };
@@ -41,6 +56,33 @@ function run(file) {
   const vols = [227.8, 235.57, 220.02, 233.35, 230.02, 238.91, 222.24, 231.13, 234.46, 226.69, 232.24];
   const p = E.prorate(D, vols.map((v, i) => ({ id: 'V' + i, vol: v })));
   assert.ok(p.ok, 'el prorrateo debe cuadrar con los totales del despacho');
+  checkTickets(E, D, p, 'caso README');
+
+  // Caso de la hoja Ctks_Prorrateo (bache de 9 carrotanques, crudo 17,2 °API, BSW 0,336 %).
+  // Premisas: BSW y API iguales en todas las placas; solo varían T equivalente y CTL; Σ exactas.
+  const csw = E.round((100 - 0.336) / 100, 5);
+  const DX = { gov: 1985.08, gsv: 1922.71, csw, bswUsed: 0.336, nsv: E.round(1922.71 * csw, 2), api60: 17.2 };
+  const placas = [['LPZ035', 233.99], ['WEQ631', 229.92], ['SVD130', 208.11], ['TTG443', 228.16], ['SSW708', 208.99],
+    ['WWA694', 206.03], ['SWK550', 230], ['TSV111', 227.15], ['SPU787', 204.1]].map(([id, vol]) => ({ id, vol }));
+  const px = E.prorate(DX, placas);
+  assert.equal(px.t0, 142.5, 'T equivalente del despacho');
+  assert.equal(px.ctl0, 0.96858, 'CTL del despacho a T equivalente');
+  checkTickets(E, DX, px, 'Ctks_Prorrateo');
+  const pw = E.prorate(DX, placas, { tMaxDev: 1.0 });
+  checkTickets(E, DX, pw, 'Ctks_Prorrateo ±1 °F');
+  assert.equal(pw.tickets, placas.length, 'con ±1,0 °F todos los tiquetes deben cuadrar sin ajuste');
+
+  // Estrés: baches aleatorios de 1 a 16 vehículos.
+  let seed = 7; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let z = 0; z < 300; z++) {
+    const n = 1 + Math.floor(rnd() * 16);
+    const v = Array.from({ length: n }, (_, i) => ({ id: 'V' + i, vol: E.round(150 + rnd() * 120, 2) }));
+    const api = E.round(10 + rnd() * 40, 1), T = E.round(60 + rnd() * 120, 1);
+    const gov = E.round(v.reduce((s, x) => s + x.vol, 0) * (0.97 + rnd() * 0.04), 2);
+    const gsv = E.round(gov * E.CTL(api, T) * (0.997 + rnd() * 0.006), 2), b = E.round(rnd() * 2, 3), c = E.round((100 - b) / 100, 5);
+    const DD = { gov, gsv, csw: c, bswUsed: b, nsv: E.round(gsv * c, 2), api60: api };
+    checkTickets(E, DD, E.prorate(DD, v), 'estrés ' + z);
+  }
   console.log(`OK ${file}: GOV ${D.gov} · GSV ${D.gsv} · NSV ${D.nsv}`);
 }
 

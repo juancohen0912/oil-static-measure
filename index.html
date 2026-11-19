@@ -71,8 +71,8 @@ td.key{background:color-mix(in srgb,var(--accent) 9%,transparent);font-weight:60
 .checks{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
 .ck{border:1px solid var(--line);border-radius:6px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
 .ck .k{font:700 13px var(--f-display);letter-spacing:.08em;color:var(--muted)} .ck .v{font:500 18px var(--f-mono)} .ck .d{font-size:12px;color:var(--muted)}
-.ck.ok{border-color:var(--ok)} .ck.bad{border-color:var(--bad)}
-.ck .s{font-weight:600;font-size:12px} .ck.ok .s{color:var(--ok)} .ck.bad .s{color:var(--bad)}
+.ck.ok{border-color:var(--ok)} .ck.bad{border-color:var(--bad)} .ck.warn{border-color:var(--amber)}
+.ck .s{font-weight:600;font-size:12px} .ck.ok .s{color:var(--ok)} .ck.bad .s{color:var(--bad)} .ck.warn .s{color:var(--amber)}
 .note{font-size:12px;color:var(--muted)}
 .hide{display:none}
 details summary{cursor:pointer;color:var(--accent);font-weight:600}
@@ -210,45 +210,132 @@ footer.legal a{color:var(--accent)}
     const gsv = d('gsv');
     const csw = R((100 - bsw) / 100, 5);
     return { tov: d('tov'), fwv: R(Math.abs(o.fwv - c.fwv), 2), gov: d('gov'), gsv, csw, bswUsed: bsw, nsv: R(gsv * csw, 2),
+             api60: o.api60, // API a 60 °F del producto despachado (apertura): se reporta igual en cada carrotanque
              nsvDiff: d('nsv') /* solo referencia: |NSV apertura − NSV cierre| */ };
   };
 
-  // --- Prorrateo a carrotanques ---
-  // veh: [{id, vol, maxGov}]; D: totales despacho; ctl/bsw efectivos del despacho
-  // 1) fracción = vol/Σvol (6 decimales)  2) GOV_i = GOV·f  3) GSV_i = GOV_i·CTL  4) NSV_i = GSV_i·(1−BSW/100)
-  // 5) "ajuste a cero": diferencia total repartida por fracción y cierre exacto en centésimas.
-  E.prorate = function (D, veh) {
+  // --- Prorrateo a carrotanques: tiquete consistente por placa ---
+  // Premisas del bache (hoja Ctks_Prorrateo del procedimiento de campo):
+  //  · El %BSW (y por tanto el CSW) y la gravedad API a 60 °F son los del tanque: iguales en todas las placas.
+  //  · Solo varían, por placa, la temperatura equivalente T y su CTL = Tabla 6A (API MPMS 11.1-2004) a esa T.
+  //  · "Ajuste a cero": Σ GOV, Σ GSV y Σ NSV de los vehículos = GOV, GSV y NSV del despacho, al centésimo.
+  //  · Cada tiquete es reproducible: CTL = CTL(API, T); GSV = ROUND(GOV·CTL, 2); NSV = ROUND(GSV·CSW, 2)
+  //    (redondeos de API MPMS 12.1.1: volúmenes a 2 decimales, CTL a 5, T a 0,1 °F).
+  // Método:
+  //  1) f = vol/Σvol; GOV_i por mayor residuo (Hamilton) en centésimas → Σ GOV exacta.
+  //  2) T0 = temperatura (0,1 °F) cuyo CTL reproduce el CTL efectivo del despacho (GSV/GOV).
+  //  3) Para cada placa se evalúan T = T0 ± k·0,1 °F y se elige, por programación dinámica, la
+  //     combinación de menor Σ(T − T0)² (desviación repartida) cuyas sumas de GSV y NSV cuadran exactas.
+  //  4) Si ninguna combinación con |T − T0| ≤ tMaxDev (0,5 °F por defecto) cuadra, se ajusta el NSV (o, con un solo vehículo,
+  //     también el GSV) en ±0,01 por mayor residuo y la placa queda marcada "ajuste de cierre".
+  // veh: [{id, vol, maxGov}]; D: resultado de E.dispatch (gov, gsv, nsv, csw, bswUsed, api60).
+  E.tempForCTL = function (api60, ctl) {
+    // Inversa de E.CTL (decreciente en T): bisección en °F y ajuste a la grilla de 0,1 °F.
+    let lo = -58, hi = 302;
+    for (let i = 0; i < 60; i++) { const m = (lo + hi) / 2; if (E.CTL(api60, m) > ctl) lo = m; else hi = m; }
+    const t = R((lo + hi) / 2, 1);
+    let best = t, bd = Infinity;
+    for (let k = -3; k <= 3; k++) {
+      const tt = R(t + k / 10, 1); if (tt < -58 || tt > 302) continue;
+      const d = Math.abs(E.CTL(api60, tt) - ctl); if (d < bd - 1e-12) { bd = d; best = tt; }
+    }
+    return best;
+  };
+  E.prorate = function (D, veh, opts) {
     const act = veh.filter((v) => v.vol > 0);
     const sumVol = act.reduce((s, v) => s + Number(v.vol), 0);
     if (!act.length || sumVol <= 0) throw new Error('No hay volúmenes programados para prorratear');
-    const ctlEff = D.gov > 0 ? D.gsv / D.gov : 0;
-    const bswEff = D.gsv > 0 ? (1 - D.nsv / D.gsv) * 100 : 0;
-    const rows = act.map((v) => {
-      const f = R(Number(v.vol) / sumVol, 6);
-      const gov = D.gov * f, gsv = gov * ctlEff, nsv = gsv * (1 - bswEff / 100);
-      return { id: v.id, vol: Number(v.vol), maxGov: v.maxGov, f, govP: gov, gsvP: gsv, nsvP: nsv };
-    });
-    const sf = rows.reduce((s, r) => s + r.f, 0);
-    const diff = { gov: D.gov - rows.reduce((s, r) => s + r.govP, 0), gsv: D.gsv - rows.reduce((s, r) => s + r.gsvP, 0), nsv: D.nsv - rows.reduce((s, r) => s + r.nsvP, 0) };
-    // ajuste: reparte la diferencia proporcional a la fracción, redondea a 0.01 y cierra residuo en el mayor
-    ['gov', 'gsv', 'nsv'].forEach((k) => {
-      const P = k + 'P', A = k + 'A';
-      rows.forEach((r) => { r[A] = R(r[P] + diff[k] * (r.f / sf), 2); });
-      const target = cents(D[k]);
-      let resid = target - rows.reduce((s, r) => s + cents(r[A]), 0);
-      if (resid !== 0) {
-        const big = rows.reduce((m, r) => (r.vol > m.vol ? r : m), rows[0]);
-        big[A] = (cents(big[A]) + resid) / 100;
+    if (!(D.gov > 0)) throw new Error('El GOV del despacho debe ser mayor que cero');
+    const api = Number(D.api60);
+    if (!(api >= 0 && api <= 100)) throw new Error('El despacho no tiene gravedad API válida para el prorrateo (Tabla 6A: 0–100 °API)');
+    const csw = isFinite(D.csw) ? Number(D.csw) : R(D.nsv / D.gsv, 5);
+    const bsw = isFinite(D.bswUsed) ? Number(D.bswUsed) : R((1 - csw) * 100, 4);
+    const ctlEff = D.gsv / D.gov;
+    const TG = cents(D.gsv), TN = cents(D.nsv), n = act.length;
+
+    // 1) GOV por mayor residuo
+    const w = act.map((v) => cents(Number(v.vol)));
+    const W = w.reduce((s, x) => s + x, 0), TGov = cents(D.gov);
+    const raw = w.map((x) => (TGov * x) / W), gc = raw.map((x) => Math.floor(x + 1e-9));
+    raw.map((x, i) => [x - gc[i], i]).sort((a, b) => b[0] - a[0] || a[1] - b[1]).slice(0, TGov - gc.reduce((s, x) => s + x, 0)).forEach(([, i]) => gc[i]++);
+
+    // 2) temperatura equivalente del despacho
+    const T0 = E.tempForCTL(api, ctlEff);
+    const opt = (gov, k) => {
+      const t = R(T0 + k / 10, 1); if (t < -58 || t > 302) return null;
+      const ctl = E.CTL(api, t), gsv = cents(R(gov * ctl, 2)), nsv = cents(R((gsv / 100) * csw, 2));
+      return { k, t, ctl, gsv, nsv };
+    };
+
+    // 3) programación dinámica sobre (Σ GSV, Σ NSV) con poda por alcanzabilidad
+    const solve = (K, withN) => {
+      const opts = gc.map((g) => { const o = []; for (let k = -K; k <= K; k++) { const x = opt(g / 100, k); if (x) o.push(x); } return o; });
+      const mnG = opts.map((o) => Math.min(...o.map((x) => x.gsv))), mxG = opts.map((o) => Math.max(...o.map((x) => x.gsv)));
+      const mnN = opts.map((o) => Math.min(...o.map((x) => x.nsv))), mxN = opts.map((o) => Math.max(...o.map((x) => x.nsv)));
+      const remMnG = [], remMxG = [], remMnN = [], remMxN = [];
+      for (let i = n, a = 0, b = 0, c = 0, d = 0; i >= 0; i--) { remMnG[i] = a; remMxG[i] = b; remMnN[i] = c; remMxN[i] = d; if (i > 0) { a += mnG[i - 1]; b += mxG[i - 1]; c += mnN[i - 1]; d += mxN[i - 1]; } }
+      let layer = new Map([['0|0', { g: 0, n: 0, cost: 0, path: [] }]]);
+      for (let i = 0; i < n; i++) {
+        const next = new Map();
+        for (const st of layer.values()) for (let j = 0; j < opts[i].length; j++) {
+          const x = opts[i][j], g = st.g + x.gsv, nn = st.n + x.nsv;
+          if (g + remMnG[i + 1] > TG || g + remMxG[i + 1] < TG) continue;
+          if (withN && (nn + remMnN[i + 1] > TN || nn + remMxN[i + 1] < TN)) continue;
+          const cost = st.cost + x.k * x.k, key = withN ? g + '|' + nn : String(g), cur = next.get(key);
+          if (!cur || cost < cur.cost) next.set(key, { g, n: nn, cost, path: st.path.concat(j) });
+        }
+        if (!next.size) return null;
+        layer = next;
       }
+      const end = layer.get(withN ? TG + '|' + TN : String(TG));
+      return end ? end.path.map((j, i) => Object.assign({}, opts[i][j])) : null;
+    };
+    // Límite de desviación de temperatura por placa respecto de T0 (por defecto ±0,5 °F, configurable).
+    const tDev = opts && isFinite(opts.tMaxDev) && opts.tMaxDev >= 0 ? Math.min(Number(opts.tMaxDev), 3) : 0.5;
+    const KMAX = Math.round(tDev * 10);
+    const Ks = [1, 2, 3, 5, 10, 20, 30].filter((k) => k < KMAX).concat(KMAX);
+    let pick = null, level = 'exacto';
+    for (const K of Ks) { pick = solve(K, true); if (pick) break; }
+    // 4) respaldo. El redondeo de NSV = ROUND(GSV·CSW, 2) con CSW único puede impedir que Σ NSV cuadre
+    //    junto con Σ GSV: entonces se resuelve solo GSV con la temperatura y la diferencia de NSV
+    //    (pocas centésimas) se asigna por mayor residuo a las placas más cercanas al límite de redondeo.
+    const close = (key, target, exact) => {
+      let r = target - pick.reduce((s, x) => s + x[key], 0); const dir = r > 0 ? 1 : -1;
+      exact.map((v, i) => [(v - pick[i][key]) * dir, i]).sort((a, b) => b[0] - a[0] || a[1] - b[1])
+        .forEach(([, i]) => { if (r !== 0) { pick[i][key] += dir; pick[i].adj = (pick[i].adj ? pick[i].adj + '+' : '') + key; r -= dir; } });
+    };
+    if (!pick) {
+      for (const K of Ks) { pick = solve(K, false); if (pick) break; }
+      if (pick) { level = 'nsv'; close('nsv', TN, pick.map((x) => x.gsv * csw)); }
+    }
+    if (!pick) {
+      level = 'gsv';
+      pick = gc.map((g) => opt(g / 100, 0));
+      close('gsv', TG, gc.map((g, i) => g * pick[i].ctl));
+      pick.forEach((x) => { x.nsv = cents(R((x.gsv / 100) * csw, 2)); });
+      close('nsv', TN, pick.map((x) => x.gsv * csw));
+    }
+    const fallback = level !== 'exacto';
+
+    const rows = act.map((v, i) => {
+      const f = R(Number(v.vol) / sumVol, 6), x = pick[i];
+      const govA = gc[i] / 100, gsvA = x.gsv / 100, nsvA = x.nsv / 100;
+      const chkG = R(R(govA * x.ctl, 2) - gsvA, 2), chkN = R(R(gsvA * csw, 2) - nsvA, 2);
+      return { id: v.id, vol: Number(v.vol), maxGov: v.maxGov, f,
+        govP: D.gov * (w[i] / W), gsvP: D.gsv * (w[i] / W), nsvP: D.nsv * (w[i] / W),
+        govA, gsvA, nsvA, ctlA: x.ctl, tA: x.t, apiA: api, bswA: bsw, cswA: csw,
+        chkG, chkN, ticketOk: chkG === 0 && chkN === 0, adj: x.adj || '',
+        overMax: v.maxGov ? govA > v.maxGov : false };
     });
-    rows.forEach((r) => { r.bswA = r.gsvA ? R((r.gsvA - r.nsvA) / r.gsvA * 100, 4) : 0; r.overMax = r.maxGov ? r.govA > r.maxGov : false; });
     const sums = {};
     ['gov', 'gsv', 'nsv'].forEach((k) => {
       sums[k] = { prorrateo: R(rows.reduce((s, r) => s + r[k + 'P'], 0), 4), ajustado: rows.reduce((s, r) => s + cents(r[k + 'A']), 0) / 100, total: D[k] };
       sums[k].ok = cents(sums[k].ajustado) === cents(sums[k].total);
       sums[k].diffPre = R(sums[k].total - sums[k].prorrateo, 4);
     });
-    return { rows, sums, sumVol, ctlEff, bswEff, ok: sums.gov.ok && sums.gsv.ok && sums.nsv.ok };
+    const tickets = rows.filter((r) => r.ticketOk).length;
+    return { rows, sums, sumVol, ctlEff, ctl0: E.CTL(api, T0), t0: T0, api, bswEff: bsw, csw, tickets, fallback, level, tMaxDev: KMAX / 10,
+      ok: sums.gov.ok && sums.gsv.ok && sums.nsv.ok };
   };
 
   if (typeof module !== 'undefined') module.exports = E; else root.OilEngine = E;
@@ -1557,12 +1644,12 @@ function inp(label,path,o={}){const v=getPath(cur,path)??'';
 
 /* ---------- Estado de la operación ---------- */
 function blankSide(){return {lv:['','',''],fwl:'0',ref:'',tv:['','',''],amb:'',api:''}}
-function demoOp(){return {id:'',rev:0,fecha:today(),orden:'DSP-0001',tankId:'DEMO',product:'Petróleo crudo',sameQ:true,fra:'0',tol:'0.5',bsw:'0.35',note:'',
+function demoOp(){return {id:'',rev:0,fecha:today(),orden:'DSP-0001',tankId:'DEMO',product:'Petróleo crudo',sameQ:true,fra:'0',tol:'0.5',tdev:'0.5',bsw:'0.35',note:'',
   open:{lv:['10420','10420','10420'],fwl:'0',ref:'13500',tv:['152.8','153.4','154.0'],amb:'',api:'21.3'},
   close:{lv:['9790','9790','9790'],fwl:'0',ref:'13500',tv:['152.3','152.9','153.5'],amb:'',api:'21.3'},
   veh:DEMO_VEH.map(v=>({key:v.key,vol:String(v.loads[0].vol),max:String(v.maxGov)})),demo:true}}
 const fixBsw=c=>{if(c.bsw===undefined||c.bsw==='')c.bsw=c.open?.bsw||c.close?.bsw||'';return c};
-function newOp(){return {id:'',rev:0,fecha:today(),orden:'',tankId:'',product:'',sameQ:true,fra:'0',tol:'0.5',bsw:'',note:'',open:blankSide(),close:blankSide(),veh:[{key:'',vol:'',max:''}]}}
+function newOp(){return {id:'',rev:0,fecha:today(),orden:'',tankId:'',product:'',sameQ:true,fra:'0',tol:'0.5',tdev:'0.5',bsw:'',note:'',open:blankSide(),close:blankSide(),veh:[{key:'',vol:'',max:''}]}}
 let cur=demoOp(), tab='despacho', calc=null;
 
 /* ---------- Pestañas ---------- */
@@ -1589,7 +1676,7 @@ function sideForm(k,title){const P=k+'.';const q=k==='close'&&cur.sameQ;
 function vehRow(v,i){return `<tr data-i="${i}"><td class="t">${i+1}</td>
  <td class="t"><input class="txt" list="vehlist" data-vk="key" value="${esc(v.key)}" placeholder="Cabezote/Remolque" aria-label="Binomio ${i+1}" style="min-width:150px"></td>
  <td><input data-vk="vol" inputmode="decimal" value="${esc(v.vol)}" aria-label="Volumen programado ${i+1}" style="width:96px"></td>
- <td id="vf${i}"></td><td id="vg${i}" class="mono"></td><td id="vs${i}" class="mono"></td><td id="vn${i}" class="mono key"></td><td id="vb${i}"></td><td id="ve${i}" class="t"></td>
+ <td id="vf${i}"></td><td id="vg${i}" class="mono"></td><td id="vs${i}" class="mono"></td><td id="vn${i}" class="mono key"></td><td id="vb${i}" class="mono"></td><td id="va${i}" class="mono"></td><td id="vt${i}" class="mono"></td><td id="vc${i}" class="mono"></td><td id="ve${i}" class="t"></td>
  <td class="t"><button class="b s" data-vdel="${i}" aria-label="Quitar fila ${i+1}">✕</button></td></tr>`}
 function viewDespacho(){confirmAl=false;
   $('#app').innerHTML=`<div id="toasts" class="msgs"></div>
@@ -1598,7 +1685,7 @@ function viewDespacho(){confirmAl=false;
    <button class="b" id="bNew">Nueva operación</button><button class="b p" id="bSave" ${S.canWrite?'':'disabled'}>Guardar operación</button></div>
    <div class="grid">${inp('N.º de orden / despacho','orden',{txt:1})}${inp('Fecha','fecha',{txt:1,type:'date'})}
     <label class="f">Tanque (tabla de aforo)<select id="selTank" data-k="tankId"><option value="">— elegir —</option>${tankOpts()}</select></label>
-    ${inp('Producto','product',{txt:1,list:'prodlist'})}${inp('Ajuste techo flotante FRA','fra',{u:'bbl'})}${inp('Tolerancia programado vs bache','tol',{u:'%'})}${inp('% BSW (S&W) de la operación','bsw',{u:'%'})}</div>
+    ${inp('Producto','product',{txt:1,list:'prodlist'})}${inp('Ajuste techo flotante FRA','fra',{u:'bbl'})}${inp('Tolerancia programado vs bache','tol',{u:'%'})}${inp('Desviación máx. de T por placa','tdev',{u:'°F'})}${inp('% BSW (S&W) de la operación','bsw',{u:'%'})}</div>
    <div class="row"><button class="b s" id="bSaveProd">Guardar producto en la biblioteca</button><span class="note">Las medidas se ingresan en milímetros y los volúmenes salen en barriles (bbl) a 60 °F.</span></div>
    <datalist id="prodlist">${Object.values(S.cache.products).map(p=>`<option value="${esc(p.name)}">`).join('')}</datalist>
    <datalist id="vehlist">${Object.values(S.cache.vehicles).map(v=>`<option value="${esc(v.key)}">`).join('')}${cur.demo?DEMO_VEH.map(v=>`<option value="${v.key}">`).join(''):''}</datalist>
@@ -1608,9 +1695,9 @@ function viewDespacho(){confirmAl=false;
   <section class="card"><div class="row"><h3 style="margin-right:auto">Bache de carrotanques</h3>
     <button class="b s" id="vAdd">+ Agregar vehículo</button><button class="b s" id="vPaste">Pegar desde Excel</button><button class="b s" id="vEven">Usar media histórica</button></div>
    <div id="pasteBox" class="hide"><textarea id="pasteTa" rows="5" placeholder="Pegue columnas: cabezote/remolque ⇥ volumen"></textarea><button class="b s" id="pasteOk" style="margin-top:6px">Aplicar</button></div>
-   <div class="tw"><table><thead><tr><th>#</th><th class="t">Cabezote / remolque</th><th>Vol. programado (máx. a cargar) bbl</th><th>Fracción</th><th>GOV bbl</th><th>GSV bbl</th><th>NSV bbl</th><th>%BSW</th><th class="t">Estado</th><th></th></tr></thead>
+   <div class="tw"><table><thead><tr><th>#</th><th class="t">Cabezote / remolque</th><th>Vol. programado (máx. a cargar) bbl</th><th>Fracción</th><th>GOV bbl</th><th>GSV bbl</th><th>NSV bbl</th><th>%BSW</th><th>API @60 °F</th><th title="Temperatura equivalente calculada: la que, con la API del tanque, da el CTL de la placa (Tabla 6A)">T equiv. °F</th><th>CTL</th><th class="t">Estado</th><th></th></tr></thead>
    <tbody id="vbody">${cur.veh.map(vehRow).join('')}</tbody><tfoot id="vfoot"></tfoot></table></div>
-   <div class="note">Los volúmenes por vehículo se distribuyen por fracción del volumen programado y se ajustan a cero para que la suma sea exactamente la del despacho.</div></section>
+   <div class="note">Los volúmenes por vehículo se distribuyen por fracción del volumen programado y se ajustan a cero para que la suma sea exactamente la del despacho. El %BSW y la API son los del tanque en todas las placas; solo cambian la <b>temperatura equivalente</b> (calculada, no medida) y su CTL, de modo que cada tiquete se reproduce: CTL = Tabla 6A(API, T), GSV = GOV × CTL, NSV = GSV × CSW.</div></section>
   <section class="card"><h3>Chequeo: suma de carrotanques = total del despacho</h3><div class="checks" id="checks"></div><div id="alerts" class="msgs"></div></section>`;
   recalc()}
 
@@ -1649,14 +1736,16 @@ function recalc(){
   $('#resN').innerHTML=D?`Despacho según API MPMS 12.1.1 §15.2.1 (tanques de arrendamiento): GOV, GSV = |apertura − cierre|; <b>NSV = ΔGSV × CSW</b> = ${fmt(D.gsv)} × ${fmt(D.csw,5)} (BSW ${fmt(D.bswUsed,3)} %). Referencia: NSV apertura − NSV cierre = ${fmt(D.nsvDiff)} bbl.`:'';
   // Vehículos
   let pr=null;const vehs=cur.veh.map((v,i)=>({id:v.key||('#'+(i+1)),vol:num(v.vol)||0,maxGov:0}));
-  if(D&&D.gov>0&&vehs.some(v=>v.vol>0)){try{pr=E.prorate(D,vehs)}catch(e){errs.push(e.message)}}
+  if(D&&D.gov>0&&vehs.some(v=>v.vol>0)){try{pr=E.prorate(D,vehs,{tMaxDev:isNaN(num(cur.tdev))?0.5:num(cur.tdev)})}catch(e){errs.push(e.message)}}
+  if(D&&!cur.sameQ&&o&&c&&o.api60!==c.api60)warns.push(`La API de apertura (${fmt(o.api60,1)}) y la de cierre (${fmt(c.api60,1)}) difieren: en los carrotanques se reporta la API de apertura, que es la del producto despachado.`);
   calc.pr=pr;
   cur.veh.forEach((v,i)=>{const r=pr&&pr.rows.find(x=>x.id===(v.key||('#'+(i+1))));const set=(id,h)=>{const e=$('#'+id+i);if(e)e.innerHTML=h};
-    set('vf',r?fmt(r.f,6):'');set('vg',r?fmt(r.govA):'');set('vs',r?fmt(r.gsvA):'');set('vn',r?fmt(r.nsvA):'');set('vb',r?fmt(r.bswA,3):'');
+    set('vf',r?fmt(r.f,6):'');set('vg',r?fmt(r.govA):'');set('vs',r?fmt(r.gsvA):'');set('vn',r?fmt(r.nsvA):'');set('vb',r?fmt(r.bswA,3):'');set('va',r?fmt(r.apiA,1):'');set('vt',r?fmt(r.tA,1):'');set('vc',r?fmt(r.ctlA,5):'');
     const ch=[];if(r){if(r.over)ch.push(`<span class="chip bad" title="El GOV prorrateado (${fmt(r.govA)} bbl) supera el volumen programado (${fmt(r.vol)} bbl)">Posible sobrellenado</span>`);
+      if(r.adj)ch.push(`<span class="chip warn" title="Ajuste de cierre: ${r.adj.toUpperCase()} ±0,01 bbl para que la suma cuadre con el despacho">Ajuste ${r.adj.toUpperCase()} ±0,01</span>`);
       if(!ch.length)ch.push('<span class="chip ok">OK</span>')}
     set('ve',ch.join(' '))});
-  $('#vfoot').innerHTML=pr?`<tr class="tot"><td></td><td class="t">Σ ${pr.rows.length} vehículos</td><td class="mono">${fmt(pr.sumVol)}</td><td class="mono">${fmt(pr.rows.reduce((s,r)=>s+r.f,0),6)}</td><td class="mono">${fmt(pr.sums.gov.ajustado)}</td><td class="mono">${fmt(pr.sums.gsv.ajustado)}</td><td class="mono">${fmt(pr.sums.nsv.ajustado)}</td><td></td><td></td><td></td></tr>`:'';
+  $('#vfoot').innerHTML=pr?`<tr class="tot"><td></td><td class="t">Σ ${pr.rows.length} vehículos</td><td class="mono">${fmt(pr.sumVol)}</td><td class="mono">${fmt(pr.rows.reduce((s,r)=>s+r.f,0),6)}</td><td class="mono">${fmt(pr.sums.gov.ajustado)}</td><td class="mono">${fmt(pr.sums.gsv.ajustado)}</td><td class="mono">${fmt(pr.sums.nsv.ajustado)}</td><td class="mono">${fmt(pr.bswEff,3)}</td><td class="mono">${fmt(pr.api,1)}</td><td class="mono" title="T equivalente del despacho">${fmt(pr.t0,1)}</td><td class="mono" title="CTL a la T equivalente del despacho">${fmt(pr.ctl0,5)}</td><td></td><td></td></tr>`:'';
   // Chequeos
   const al=[];
   if(pr){const nm={gov:'GOV',gsv:'GSV',nsv:'NSV'};
@@ -1670,7 +1759,9 @@ function recalc(){
     const nVeh=Math.max(1,Math.ceil(Math.abs(gap)/avg));
     $('#checks').innerHTML=['gov','gsv','nsv'].map(k=>{const s=pr.sums[k];return `<div class="ck ${s.ok?'ok':'bad'}"><span class="k">Σ ${nm[k]} vehículos</span><span class="v">${fmt(s.ajustado)}</span><span class="d">Despacho ${fmt(s.total)} · diferencia ${fmt(s.ajustado-s.total)} bbl · prorrateo directo ${fmt(s.prorrateo,4)} (dif. ${fmt(s.diffPre,4)})</span><span class="s">${s.ok?'✓ Cuadra':'✗ No cuadra'}</span></div>`}).join('')+
      `<div class="ck ${cov==='ok'?'ok':'bad'}"><span class="k">Programado vs bache</span><span class="v">${fmt(pr.sumVol)}</span><span class="d">GOV del despacho ${fmt(D.gov)} · diferencia ${fmt(gap)} bbl (${fmt(gapPct,2)} %) · tolerancia ${fmt(tolP,2)} %</span><span class="s">${cov==='ok'?'✓ El programa cubre el bache':cov==='falta'?'✗ Faltan vehículos':'✗ Sobran vehículos'}</span></div>`+
-     `<div class="ck ${sob.length?'bad':'ok'}"><span class="k">Programado ≥ GOV prorrateado</span><span class="v">${pr.rows.length-sob.length} de ${pr.rows.length}</span><span class="d">Cada vehículo debe tener programado igual o mayor que el GOV que le corresponde</span><span class="s">${sob.length?'✗ '+sob.length+' con posible sobrellenado':'✓ Todos en orden'}</span></div>`;
+     `<div class="ck ${sob.length?'bad':'ok'}"><span class="k">Programado ≥ GOV prorrateado</span><span class="v">${pr.rows.length-sob.length} de ${pr.rows.length}</span><span class="d">Cada vehículo debe tener programado igual o mayor que el GOV que le corresponde</span><span class="s">${sob.length?'✗ '+sob.length+' con posible sobrellenado':'✓ Todos en orden'}</span></div>`+
+     `<div class="ck ${pr.tickets===pr.rows.length?'ok':'warn'}"><span class="k">Tiquete por placa reproducible</span><span class="v">${pr.tickets} de ${pr.rows.length}</span><span class="d">CTL = Tabla 6A(API ${fmt(pr.api,1)}, T) · GSV = GOV×CTL · NSV = GSV×CSW ${fmt(pr.csw,5)} (BSW ${fmt(pr.bswEff,3)} % en todas) · T equivalente del despacho ${fmt(pr.t0,1)} °F, desviación máx. ±${fmt(pr.tMaxDev,1)} °F</span><span class="s">${pr.tickets===pr.rows.length?'✓ Todos cuadran':'⚠ '+(pr.rows.length-pr.tickets)+' con ajuste de cierre ±0,01'}</span></div>`;
+    if(pr.fallback)al.push({k:'warn',t:`Con la desviación de temperatura permitida (±${fmt(pr.tMaxDev,1)} °F) no existe una combinación que cuadre las sumas y todos los tiquetes a la vez. Se aplicó un ajuste de cierre de ±0,01 bbl en ${pr.rows.filter(r=>r.adj).map(r=>r.id+' ('+r.adj.toUpperCase()+')').join(', ')}. Puede ampliar la desviación máxima de T por placa para buscar un cierre exacto.`});
     if(sob.length)al.push({k:'bad',t:`Posible sobrellenado o sobrepeso: el GOV prorrateado supera el volumen programado en ${sob.map(r=>`${r.id} (+${fmt(r.govA-r.vol)} bbl)`).join(', ')}. Revise el programa o el volumen real cargado.`});
     if(cov==='falta')al.push({k:'bad',t:`Faltan vehículos programados para completar el bache: el volumen programado (${fmt(pr.sumVol)} bbl) es ${fmt(-gap)} bbl menor que el GOV despachado (${fmt(D.gov)} bbl). Equivale a ${nVeh} carrotanque${nVeh>1?'s':''} más del tamaño promedio programado. Agregue los vehículos faltantes o revise las medidas del tanque.`});
     if(cov==='sobra')al.push({k:'bad',t:`Hay carrotanques de más para este bache: el volumen programado (${fmt(pr.sumVol)} bbl) supera en ${fmt(gap)} bbl el GOV despachado (${fmt(D.gov)} bbl). Equivale a ${nVeh} carrotanque${nVeh>1?'s':''} del tamaño promedio programado. Retire vehículos o revise las medidas del tanque.`});
@@ -1679,6 +1770,7 @@ function recalc(){
     // refrescar estado por vehículo con la bandera de sobrellenado ya calculada
     cur.veh.forEach((v,i)=>{const r=pr.rows.find(x=>x.id===(v.key||('#'+(i+1))));const e=$('#ve'+i);if(!e||!r)return;const ch=[];
       if(r.over)ch.push(`<span class="chip bad" title="GOV prorrateado ${fmt(r.govA)} bbl > programado ${fmt(r.vol)} bbl">Posible sobrellenado</span>`);
+      if(r.adj)ch.push(`<span class="chip warn" title="Ajuste de cierre: ${r.adj.toUpperCase()} ±0,01 bbl para que la suma cuadre con el despacho">Ajuste ${r.adj.toUpperCase()} ±0,01</span>`);
       if(!ch.length)ch.push('<span class="chip ok">OK</span>');e.innerHTML=ch.join(' ')});
   }else $('#checks').innerHTML='<div class="msg info">Complete el cálculo del tanque y los volúmenes programados para chequear la suma.</div>';
   $('#msgs').innerHTML=errs.map(e=>`<div class="msg bad">${esc(e)}</div>`).join('')+warns.map(w=>`<div class="msg warn">${esc(w)}</div>`).join('');
@@ -1694,7 +1786,7 @@ async function saveOp(){
   const tank=getTank(cur.tankId);if(cur.tankId==='DEMO'&&!confirmDemo)return toast('Está usando el tanque de ejemplo. Pulse Guardar de nuevo para confirmar.','warn',confirmDemo=true);
   if(!cur.id)cur.id=slug(cur.orden)+'-'+cur.fecha;cur.rev=(cur.rev||0)+1;delete cur.demo;
   const rec={id:cur.id,rev:cur.rev,savedAt:new Date().toISOString(),by:S.me.name,status:'vigente',inputs:JSON.parse(JSON.stringify(cur)),tank:tank?.name,
-    totals:calc.D,alerts:calc.alerts||[],open:calc.o,close:calc.c,vehicles:calc.pr.rows.map(r=>({id:r.id,vol:r.vol,f:r.f,gov:r.govA,gsv:r.gsvA,nsv:r.nsvA,bsw:r.bswA}))};
+    totals:calc.D,alerts:calc.alerts||[],open:calc.o,close:calc.c,vehicles:calc.pr.rows.map(r=>({id:r.id,vol:r.vol,f:r.f,gov:r.govA,gsv:r.gsvA,nsv:r.nsvA,bsw:r.bswA,api:r.apiA,tEq:r.tA,ctl:r.ctlA,csw:r.cswA,adj:r.adj}))};
   rec.hash=await sha256(JSON.stringify(rec.inputs)+JSON.stringify(rec.totals));
   await put('ops',cur.id,rec);
   for(const v of cur.veh){const key=(v.key||'').trim().toUpperCase();const vol=num(v.vol);if(!key||!vol)continue;
@@ -1847,15 +1939,15 @@ document.addEventListener('click',async e=>{const t=e.target.closest('button');i
     const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(templateRows()),'Operacion');XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(vehTemplate()),'Carrotanques');
     saveFile('plantilla_operacion.xlsx',new Blob([XLSX.write(wb,{type:'array',bookType:'xlsx'})],{type:'application/octet-stream'}))}
   if(t.id==='exJ'){const fn=stamp()+'.json';audit('EXPORTAR_REPORTE',fn,'json · orden '+cur.orden);saveFile(fn,new Blob([JSON.stringify({inputs:cur,results:calc.D?{open:calc.o,close:calc.c,dispatch:calc.D,vehicles:calc.pr?.rows}:null},null,2)],{type:'application/json'}))}
-  if(t.id==='exC'){if(!calc.pr)return toast('No hay prorrateo calculado.','warn');const h='binomio;vol_programado;fraccion;gov;gsv;nsv;bsw_pct';
-    const fn=stamp()+'.csv';audit('EXPORTAR_REPORTE',fn,'csv carrotanques · orden '+cur.orden);saveFile(fn,new Blob([[h,...calc.pr.rows.map(r=>[r.id,r.vol,r.f,r.govA,r.gsvA,r.nsvA,r.bswA].join(';'))].join('\n')],{type:'text/csv'}))}
+  if(t.id==='exC'){if(!calc.pr)return toast('No hay prorrateo calculado.','warn');const h='binomio;vol_programado;fraccion;gov;gsv;nsv;bsw_pct;api60;t_equiv_f;ctl;csw;ajuste_cierre';
+    const fn=stamp()+'.csv';audit('EXPORTAR_REPORTE',fn,'csv carrotanques · orden '+cur.orden);saveFile(fn,new Blob([[h,...calc.pr.rows.map(r=>[r.id,r.vol,r.f,r.govA,r.gsvA,r.nsvA,r.bswA,r.apiA,r.tA,r.ctlA,r.cswA,r.adj].join(';'))].join('\n')],{type:'text/csv'}))}
   if(t.id==='exX'){if(!calc.D)return toast('Complete el cálculo antes de exportar.','warn');if(!window.XLSX)return toast('La librería de Excel no cargó; use CSV.','warn');
     const wb=XLSX.utils.book_new();const o=calc.o,c=calc.c,D=calc.D;
     const fn=stamp()+'.xlsx';const res=[['Código de reporte',fn.replace('.xlsx','')],['Orden',cur.orden],['%BSW aplicado al despacho',D.bswUsed],['Fecha',cur.fecha],['Tanque',getTank(cur.tankId)?.name],['Producto',cur.product],['Usuario',S.me.name],[],['Concepto','Apertura','Cierre','Despacho'],
       ...[['TOV','tov'],['FWV','fwv'],['CTSh','ctsh'],['GOV','gov'],['CTL','ctl'],['GSV','gsv'],['CSW','csw'],['NSV','nsv']].map(([l,k])=>[l,o[k],c[k],D[k]??'']),['Nivel mm',o.levelMm,c.levelMm],['Temp °F',o.tempF,c.tempF],['API 60F',o.api60,c.api60],['BSW %',o.bsw,c.bsw],[],['Generado con Oil Static Measure · © 2026 Juan Cohen'],['Herramienta de apoyo: valide los resultados contra su procedimiento y la liquidación oficial.']];
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(res),'Resumen');
-    if(calc.pr){const p=calc.pr;const v=[['Binomio','Vol. programado','Fracción','GOV prorrateo','GSV prorrateo','NSV prorrateo','GOV ajustado','GSV ajustado','NSV ajustado','%BSW'],...p.rows.map(r=>[r.id,r.vol,r.f,r.govP,r.gsvP,r.nsvP,r.govA,r.gsvA,r.nsvA,r.bswA]),
-      ['Σ',p.sumVol,'','','','',p.sums.gov.ajustado,p.sums.gsv.ajustado,p.sums.nsv.ajustado],['Total despacho','','','','','',D.gov,D.gsv,D.nsv],['Cuadra',p.ok?'SÍ':'NO']];XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(v),'Carrotanques')}
+    if(calc.pr){const p=calc.pr;const v=[['Binomio','Vol. programado','Fracción','GOV prorrateo','GSV prorrateo','NSV prorrateo','GOV ajustado','GSV ajustado','NSV ajustado','%BSW','API @60 °F','T equivalente °F','CTL','CSW','Ajuste de cierre'],...p.rows.map(r=>[r.id,r.vol,r.f,r.govP,r.gsvP,r.nsvP,r.govA,r.gsvA,r.nsvA,r.bswA,r.apiA,r.tA,r.ctlA,r.cswA,r.adj||'']),
+      ['Σ',p.sumVol,'','','','',p.sums.gov.ajustado,p.sums.gsv.ajustado,p.sums.nsv.ajustado],['Total despacho','','','','','',D.gov,D.gsv,D.nsv,p.bswEff,p.api,p.t0,p.ctl0,p.csw],['Cuadra',p.ok?'SÍ':'NO'],['Tiquetes reproducibles',p.tickets+' de '+p.rows.length],['Nota','T equivalente: calculada con la API del tanque para reproducir el CTL de cada placa (Tabla 6A); no es una temperatura medida en el carrotanque.']];XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(v),'Carrotanques')}
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(templateRows()),'Entradas');
     audit('EXPORTAR_REPORTE',fn,'xlsx · orden '+cur.orden+' · GOV '+D.gov+' GSV '+D.gsv+' NSV '+D.nsv);saveFile(fn,new Blob([XLSX.write(wb,{type:'array',bookType:'xlsx'})],{type:'application/octet-stream'}))}});
 
@@ -1893,8 +1985,14 @@ Despacho (API 12.1.1 §15.2.1, tanques de arrendamiento):
   ΔTOV, ΔGOV, ΔGSV = |apertura − cierre|
   CSW = (100 − %BSW)/100 (5 dec.)  con el %BSW único de la operación (el mismo en apertura y cierre)
   NSV despacho = ΔGSV · CSW                  (no se resta NSV de apertura y cierre)
-Prorrateo: f = vol_i/Σvol (6 dec.); GOV_i = GOV·f; GSV_i = GOV_i·CTL; NSV_i = GSV_i·(1−BSW);
-           diferencia total repartida por f y cierre exacto en centésimas ("ajuste a cero").</div>
+Prorrateo (tiquete consistente por placa):
+  f = vol_i/Σvol;  GOV_i por mayor residuo en centésimas → Σ GOV_i = GOV del despacho
+  %BSW, CSW y API a 60 °F = los del tanque, iguales en todas las placas
+  T0 = temperatura (0,1 °F) cuyo CTL Tabla 6A reproduce GSV/GOV del despacho
+  por placa: T_i = T0 ± k·0,1 °F (máx. ±desviación configurada), CTL_i = Tabla 6A(API, T_i)
+             GSV_i = ROUND(GOV_i·CTL_i, 2);  NSV_i = ROUND(GSV_i·CSW, 2)
+  "ajuste a cero": se eligen los T_i (mínima desviación) para que Σ GSV_i y Σ NSV_i cuadren exactos;
+  si no hay combinación posible, ajuste de cierre ±0,01 bbl en la placa más cercana al redondeo (marcada).</div>
  <h3>Seguridad y alcance</h3><ul><li>El módulo de autenticación con segundo factor (TOTP) estará disponible para la versión privada.</li><li>Los datos compartidos viven en la base del artefacto solo cuando el visor la concede. Si el chip “Datos” dice <i>navegador</i>, lo guardado queda solo en este equipo.</li><li>Cálculo de CTL para petróleo crudo (Tabla 6A/24A). Para refinados (6B/24B), lubricantes o densidades observadas a temperatura distinta de 60 °F hace falta ampliar el motor.</li><li>El CTL se evalúa con aritmética de doble precisión y se redondea de forma decimal a 5 cifras; las sumas del bache se concilian en enteros de centésimas de barril.</li><li>Valide el uso comercial contra el procedimiento de su compañía y el contrato; la tolerancia de altura de referencia es configurable por tanque.</li></ul></section>`}
 
 /* ---------- Arranque ---------- */
