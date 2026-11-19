@@ -28,7 +28,7 @@ function checkTickets(E, D, p, tag) {
     assert.equal(r.ctlA, E.CTL(D.api60, r.tA), tag + ': CTL = Tabla 6A(API, T equivalente)');
     assert.ok(Math.abs(r.tA - p.t0) <= p.tMaxDev + 1e-9, tag + ': desviación de T dentro del límite');
     if (!r.adj) assert.ok(r.ticketOk, tag + ': ' + r.id + ' tiquete reproducible');
-    else assert.ok(Math.abs(r.chkG) <= 0.01 && Math.abs(r.chkN) <= 0.01, tag + ': ajuste de cierre ≤ 0,01');
+    else if (!/Lite/.test(tag) || Math.abs(Math.round(D.nsv * 100) - Math.round(D.gsv * D.csw * 100)) <= 1) assert.ok(Math.abs(r.chkG) <= 0.01 && Math.abs(r.chkN) <= 0.01, tag + ': ajuste de cierre ≤ 0,01');
     if (!/gsv/.test(r.adj)) assert.equal(r.chkG, 0, tag + ': GSV = GOV×CTL sin ajuste');
   }
 }
@@ -72,6 +72,27 @@ function run(file) {
   assert.equal(px.tickets, placas.length, 'con ±1,0 °F (defecto) todos los tiquetes deben cuadrar sin ajuste');
   const pn = E.prorate(DX, placas, { tMaxDev: 0.5 });
   checkTickets(E, DX, pn, 'Ctks_Prorrateo ±0,5 °F');
+
+  // Modo Lite: mismos totales ingresados a mano (tiquete del tanque) → mismo prorrateo.
+  const L = E.liteDispatch({ gov: 1985.08, gsv: 1922.71, nsv: 1916.26, api60: 17.2, bsw: 0.336, tempF: 138.3 });
+  assert.ok(L.ok, 'Lite: datos válidos');
+  assert.equal(L.csw, 0.99664, 'Lite: CSW');
+  assert.equal(L.ctl, 0.96858, 'Lite: CTL efectivo');
+  assert.equal(L.tEq, 142.5, 'Lite: T equivalente');
+  assert.equal(L.warn.length, 1, 'Lite: solo alerta de CTL efectivo ≠ CTL a 138,3 °F (NSV dentro de 0,01)');
+  const pl = E.prorate(L, placas);
+  checkTickets(E, Object.assign({}, L), pl, 'Lite Ctks_Prorrateo');
+  assert.equal(Math.round(pl.sums.nsv.ajustado * 100), 191626, 'Lite: Σ NSV = NSV ingresado');
+  // NSV ingresado con %BSW redondeado: alerta y cierre exacto de todos modos
+  const L2 = E.liteDispatch({ gov: 1985.08, gsv: 1922.71, nsv: 1915.20, api60: 17.2, bsw: 0.336, tempF: 142.5 });
+  assert.ok(L2.ok && L2.warn.some((w) => /BSW implícito/.test(w)), 'Lite: alerta por NSV ≠ GSV×CSW');
+  const pl2 = E.prorate(L2, placas);
+  assert.ok(pl2.ok, 'Lite: Σ cuadra aunque el NSV ingresado no sea GSV×CSW');
+  assert.ok(pl2.rows.every((r) => r.bswA === 0.336 && r.apiA === 17.2), 'Lite: BSW y API únicos');
+  // Validaciones
+  assert.ok(!E.liteDispatch({ gov: 100, gsv: 99, nsv: 100, api60: 17, bsw: 0.5, tempF: 100 }).ok, 'Lite: NSV > GSV es error');
+  assert.ok(!E.liteDispatch({ gov: 100, gsv: 99, nsv: 98, api60: 120, bsw: 0.5, tempF: 100 }).ok, 'Lite: API fuera de rango');
+  assert.ok(!E.liteDispatch({ gov: 100, gsv: 99, nsv: 98, api60: 17, bsw: 0.5, tempF: 400 }).ok, 'Lite: T fuera de rango');
 
   // Estrés: baches aleatorios de 1 a 16 vehículos.
   let seed = 7; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
