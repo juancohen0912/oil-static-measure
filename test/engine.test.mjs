@@ -58,6 +58,18 @@ function run(file) {
   assert.ok(p.ok, 'el prorrateo debe cuadrar con los totales del despacho');
   checkTickets(E, D, p, 'caso README');
 
+  // Lite con los mismos totales y las temperaturas de apertura y cierre del caso completo:
+  // los GOV implícitos del tanque deben aproximar los GOV reales de apertura y cierre.
+  const LR = E.liteDispatch({ gov: D.gov, gsv: D.gsv, nsv: D.nsv, api60: 21.3, bsw: 0.35, tOpen: o.tempF, tClose: c.tempF, ambOpen: 75, ambClose: 80 });
+  assert.ok(LR.ok, 'Lite README: datos válidos');
+  console.log('Lite README: GOV implícito apertura', LR.govO, 'real', o.gov, '· cierre', LR.govC, 'real', c.gov, '· avisos', LR.warn.length);
+  assert.ok(Math.abs(LR.govO - o.gov) / o.gov < 0.02 && Math.abs(LR.govC - c.gov) / c.gov < 0.02, 'Lite README: GOV implícitos ≈ reales (±2 %)');
+  assert.ok(!LR.warn.some((w) => /no es posible/.test(w)), 'Lite README: temperaturas coherentes');
+  assert.ok(LR.shellO && LR.shellC && LR.shellO.tsh === E.round((7 * o.tempF + 75) / 8, 1), 'Lite: temperatura de lámina con ambiente');
+  // Temperaturas incoherentes: final más caliente que lo que permite GSV/GOV
+  const LX = E.liteDispatch({ gov: D.gov, gsv: D.gsv, nsv: D.nsv, api60: 21.3, bsw: 0.35, tOpen: 120, tClose: 150 });
+  assert.ok(LX.ok && LX.warn.some((w) => /no es posible/.test(w)), 'Lite: alerta por temperaturas incoherentes');
+
   // Caso de la hoja Ctks_Prorrateo (bache de 9 carrotanques, crudo 17,2 °API, BSW 0,336 %).
   // Premisas: BSW y API iguales en todas las placas; solo varían T equivalente y CTL; Σ exactas.
   const csw = E.round((100 - 0.336) / 100, 5);
@@ -74,7 +86,7 @@ function run(file) {
   checkTickets(E, DX, pn, 'Ctks_Prorrateo ±0,5 °F');
 
   // Modo Lite: mismos totales ingresados a mano (tiquete del tanque) → mismo prorrateo.
-  const L = E.liteDispatch({ gov: 1985.08, gsv: 1922.71, nsv: 1916.26, api60: 17.2, bsw: 0.336, tempF: 138.3 });
+  const L = E.liteDispatch({ gov: 1985.08, gsv: 1922.71, nsv: 1916.26, api60: 17.2, bsw: 0.336, tOpen: 138.3, tClose: 138.3 });
   assert.ok(L.ok, 'Lite: datos válidos');
   assert.equal(L.csw, 0.99664, 'Lite: CSW');
   assert.equal(L.ctl, 0.96858, 'Lite: CTL efectivo');
@@ -84,15 +96,16 @@ function run(file) {
   checkTickets(E, Object.assign({}, L), pl, 'Lite Ctks_Prorrateo');
   assert.equal(Math.round(pl.sums.nsv.ajustado * 100), 191626, 'Lite: Σ NSV = NSV ingresado');
   // NSV ingresado con %BSW redondeado: alerta y cierre exacto de todos modos
-  const L2 = E.liteDispatch({ gov: 1985.08, gsv: 1922.71, nsv: 1915.20, api60: 17.2, bsw: 0.336, tempF: 142.5 });
+  const L2 = E.liteDispatch({ gov: 1985.08, gsv: 1922.71, nsv: 1915.20, api60: 17.2, bsw: 0.336, tOpen: 142.5, tClose: 142.5 });
   assert.ok(L2.ok && L2.warn.some((w) => /BSW implícito/.test(w)), 'Lite: alerta por NSV ≠ GSV×CSW');
   const pl2 = E.prorate(L2, placas);
   assert.ok(pl2.ok, 'Lite: Σ cuadra aunque el NSV ingresado no sea GSV×CSW');
   assert.ok(pl2.rows.every((r) => r.bswA === 0.336 && r.apiA === 17.2), 'Lite: BSW y API únicos');
   // Validaciones
-  assert.ok(!E.liteDispatch({ gov: 100, gsv: 99, nsv: 100, api60: 17, bsw: 0.5, tempF: 100 }).ok, 'Lite: NSV > GSV es error');
-  assert.ok(!E.liteDispatch({ gov: 100, gsv: 99, nsv: 98, api60: 120, bsw: 0.5, tempF: 100 }).ok, 'Lite: API fuera de rango');
-  assert.ok(!E.liteDispatch({ gov: 100, gsv: 99, nsv: 98, api60: 17, bsw: 0.5, tempF: 400 }).ok, 'Lite: T fuera de rango');
+  assert.ok(!E.liteDispatch({ gov: 100, gsv: 99, nsv: 100, api60: 17, bsw: 0.5, tOpen: 100, tClose: 99 }).ok, 'Lite: NSV > GSV es error');
+  assert.ok(!E.liteDispatch({ gov: 100, gsv: 99, nsv: 98, api60: 120, bsw: 0.5, tOpen: 100, tClose: 99 }).ok, 'Lite: API fuera de rango');
+  assert.ok(!E.liteDispatch({ gov: 100, gsv: 99, nsv: 98, api60: 17, bsw: 0.5, tOpen: 100, tClose: 400 }).ok, 'Lite: T fuera de rango');
+  assert.ok(!E.liteDispatch({ gov: 100, gsv: 99, nsv: 98, api60: 17, bsw: 0.5, tOpen: 100, tClose: 99, ambOpen: 200 }).ok, 'Lite: ambiente fuera de rango');
 
   // Estrés: baches aleatorios de 1 a 16 vehículos.
   let seed = 7; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
