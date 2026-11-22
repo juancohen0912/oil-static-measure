@@ -832,7 +832,7 @@ a.ag-open:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
         ${adm ? `<td><button class="b s" data-osave="${esc(o.id)}">Guardar</button></td>` : ''}</tr>`).join('')}
       </tbody></table></div>
       <div class="note">${window.OSM_SESSION ? 'Las licencias se aplican en el servidor: sin licencia vigente, la base de datos rechaza la lectura y escritura del módulo. Solo el administrador de la plataforma las modifica, y no puede ver los datos de las organizaciones de las que no es miembro.' : 'Modo demostración: organizaciones y licencias se guardan solo en este navegador.'}</div>
-    </section>${teamSection()}`;
+    </section>${clientAccessSection(orgs)}${teamSection()}`;
     if (window.OSM_SESSION) loadTeam();
   }
   const ROLES = [['viewer', 'Visor'], ['analyst', 'Analista'], ['admin', 'Administrador'], ['owner', 'Propietario']];
@@ -862,6 +862,34 @@ a.ag-open:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
         ${inv.map((i) => `<tr><td class="t mono">${esc(i.email)}</td><td class="t">${esc(i.display_name)}</td><td class="t">${esc(rl(i.role))}</td><td class="t mono">${esc(String(i.expires_at).slice(0, 10))}</td><td><button class="b s" type="button" data-tmrev="${esc(i.id)}">Revocar</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="note">No hay invitaciones pendientes.</div>'}`;
     } catch (err) { el.innerHTML = `<div class="msg bad">${esc(err.message)}</div>`; }
   }
+  /* Alta de clientes: el administrador de la plataforma invita al primer propietario de
+     una organización de la que no es miembro. La base lo autoriza (inv_crear) y limita
+     el cupo a los usuarios de la licencia vigente (check_invitation). */
+  function clientAccessSection(orgs) {
+    const SS = window.OSM_SESSION; if (!SS || !SS.platformAdmin) return '';
+    const lic = orgs.filter((o) => o.id && /^[0-9a-f-]{36}$/.test(o.id) && (o.modules || []).length && !PL.expired(o));
+    return `<section class="card"><h2>Dar acceso a un cliente</h2>
+      <div class="note">Invite al responsable de la empresa cliente como propietario. Él podrá invitar a su equipo hasta el número de usuarios de la licencia. Primero cree la organización y guarde su licencia en la tabla de arriba.</div>
+      ${lic.length ? `<form id="caInvite" class="row" novalidate>
+        <label class="f" style="flex:2;min-width:200px"><span>Organización</span><select id="caOrg">${lic.map((o) => `<option value="${esc(o.id)}">${esc(o.name)}</option>`).join('')}</select></label>
+        <label class="f" style="flex:2;min-width:200px"><span>Correo</span><input id="caEmail" type="email" maxlength="160" required></label>
+        <label class="f" style="flex:2;min-width:200px"><span>Nombre completo</span><input id="caName" maxlength="120" required></label>
+        <label class="f" style="min-width:160px"><span>Rol</span><select id="caRole"><option value="owner">Propietario</option><option value="admin">Administrador</option></select></label>
+        <button class="b" type="submit">Invitar</button></form>` : '<div class="msg info">Aún no hay organizaciones con licencia vigente.</div>'}
+    </section>`;
+  }
+  document.addEventListener('submit', async (e) => {
+    if (e.target.id !== 'caInvite' || !window.OSM_SESSION || !window.OSM_SESSION.platformAdmin) return; e.preventDefault();
+    const sel = document.getElementById('caOrg'), oid = sel.value, oname = sel.selectedOptions[0].text;
+    const em = document.getElementById('caEmail').value.trim().toLowerCase(), nmv = document.getElementById('caName').value.trim(), rl = document.getElementById('caRole').value;
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) return A.toast('Escriba un correo válido.', 'warn');
+    if (nmv.length < 2) return A.toast('Escriba el nombre completo de la persona.', 'warn');
+    try {
+      await window.OSM_SESSION.call('/rest/v1/invitations', { method: 'POST', body: { org_id: oid, email: em, display_name: nmv, role: rl }, headers: { Prefer: 'return=minimal' } });
+      e.target.reset();
+      A.toast('Invitación creada para ' + em + ' en ' + oname + '. Vence en 7 días: pídale que entre al sitio, elija "Activar mi invitación" y use ese correo.', 'ok');
+    } catch (err) { A.toast(err.message, 'bad'); }
+  });
   document.addEventListener('submit', async (e) => {
     if (e.target.id !== 'tmInvite' || !window.OSM_SESSION) return; e.preventDefault();
     const em = document.getElementById('tmEmail').value.trim().toLowerCase(), nmv = document.getElementById('tmName').value.trim(), rl = document.getElementById('tmRole').value;

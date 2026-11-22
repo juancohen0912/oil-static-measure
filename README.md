@@ -8,7 +8,7 @@ Calculadora de medición estática de tanques (apertura y cierre) con prorrateo 
 - Prorrateo por carrotanque con ajuste a cero: Σ GOV, GSV y NSV igualan los totales del despacho; %BSW y API del tanque iguales en todas las placas; por placa solo varían la temperatura equivalente y su CTL (Tabla 6A), de modo que cada tiquete se reproduce (GSV = GOV×CTL, NSV = GSV×CSW).
 - Todos los datos incluidos son sintéticos y no pertenecen a ningún operador.
 - Módulo **Oleoducto** (licenciable aparte): balance mensual por corriente de salida con N crudos, M puntos de entrada y J puntos de salida; pérdidas identificables y no identificables con tolerancia; contracción teórica por mezcla (API MPMS 12.3); compensación volumétrica por calidad (API y azufre, o valor contractual) de suma cero; factor de compensación volumétrica por producto, remitente y cliente; saldos over/short; importación y exportación Excel con fórmulas.
-- Pestaña **Organización**: organizaciones y licencias por módulo (estática, oleoducto o total). En esta versión se guardan en el navegador; el esquema para producción con aislamiento por organización está en `docs/schema-saas-multitenant.sql`.
+- Pestaña **Organización**: organizaciones y licencias por módulo (estática, oleoducto o total), con usuarios y vencimiento. Con sesión se guardan en Supabase y la base las hace cumplir (RLS); en «Ver demostración» se guardan solo en el navegador. El administrador de la plataforma da de alta a un cliente así: crea la organización, guarda su licencia y, en «Dar acceso a un cliente», invita al propietario, que luego invita a su equipo hasta el cupo de la licencia. `docs/schema-saas-multitenant.sql` es un borrador anterior del modelo de datos del oleoducto.
 
 ## Caso de prueba sintético
 
