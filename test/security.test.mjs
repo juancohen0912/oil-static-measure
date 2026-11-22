@@ -18,3 +18,10 @@ assert.ok(!/\son[a-z]+="/i.test(html.replace(/<script>[\s\S]*?<\/script>/g, ''))
 assert.ok(!/service_role|sb_secret_/.test(html), 'nunca debe publicarse una clave de servicio');
 assert.ok(/<div class="wrap" hidden>/.test(html), 'la app debe estar oculta hasta autenticar');
 console.log('OK dist/index.html: CSP con', (csp.match(/sha256-/g) || []).length, 'huellas; sin claves secretas');
+
+// Página de producto: sin scripts y con CSP que los prohíbe.
+const prod = readFileSync('dist/producto.html', 'utf8');
+assert.ok(!/<script/i.test(prod), 'producto.html no debe tener scripts');
+assert.match(prod, /<meta http-equiv="Content-Security-Policy" content="[^"]*script-src 'none'/);
+assert.ok(!/service_role|sb_secret_|sb_publishable_/.test(prod), 'producto.html no debe llevar claves');
+console.log('OK dist/producto.html: sin scripts ni claves');

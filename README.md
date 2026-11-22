@@ -10,6 +10,8 @@ Calculadora de medición estática de tanques (apertura y cierre) con prorrateo 
 - Módulo **Oleoducto** (licenciable aparte): balance mensual por corriente de salida con N crudos, M puntos de entrada y J puntos de salida; pérdidas identificables y no identificables con tolerancia; contracción teórica por mezcla (API MPMS 12.3); compensación volumétrica por calidad (API y azufre, o valor contractual) de suma cero; factor de compensación volumétrica por producto, remitente y cliente; saldos over/short; importación y exportación Excel con fórmulas.
 - Pestaña **Organización**: organizaciones y licencias por módulo (estática, oleoducto o total), con usuarios y vencimiento. Con sesión se guardan en Supabase y la base las hace cumplir (RLS); en «Ver demostración» se guardan solo en el navegador. El administrador de la plataforma da de alta a un cliente así: crea la organización, guarda su licencia y, en «Dar acceso a un cliente», invita al propietario, que luego invita a su equipo hasta el cupo de la licencia. `docs/schema-saas-multitenant.sql` es un borrador anterior del modelo de datos del oleoducto.
 
+- **Página de producto** en `/producto` (`producto.html`, sin scripts): presenta los módulos, la trazabilidad y las licencias, con botones de demostración y cotización por correo. El correo de contacto está en los enlaces `mailto:` del archivo.
+
 ## Caso de prueba sintético
 
 Tanque "TK001" (D = 28,5 m, fondo muerto 120 bbl). Apertura: 10 420 mm, 153,4 °F, API 21,3, BSW 0,35 %. Cierre: 9 790 mm, 152,9 °F.

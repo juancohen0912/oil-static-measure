@@ -65,3 +65,26 @@ rmSync('dist', { recursive: true, force: true });
 mkdirSync('dist');
 writeFileSync('dist/index.html', html);
 console.log(`dist/index.html listo (${(html.length / 1024).toFixed(0)} KB)`);
+
+// Página de producto (/producto): HTML estático sin scripts.
+let page = readFileSync('producto.html', 'utf8').replace(/<!--[\s\S]*?-->\s*/g, '');
+if (/<script/i.test(page)) throw new Error('producto.html no debe tener scripts');
+page = await replaceAsync(page, /<style>([\s\S]*?)<\/style>/g, async (_all, css) => {
+  const out = await transform(css, { loader: 'css', minify: true, legalComments: 'none' });
+  return `<style>${out.code.trim()}</style>`;
+});
+const PAGE_CSP = [
+  "default-src 'none'",
+  "script-src 'none'",
+  "style-src 'unsafe-inline' https://fonts.googleapis.com",
+  'font-src https://fonts.gstatic.com',
+  'img-src data:',
+  "base-uri 'none'",
+  "form-action 'none'",
+  "object-src 'none'"
+].join('; ');
+if (!/<meta charset="utf-8">/.test(page)) throw new Error('producto.html sin <meta charset>');
+page = page.replace('<meta charset="utf-8">', `<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${PAGE_CSP}">`)
+  .replace(/^<!doctype html>/i, `<!doctype html>\n${HTML_NOTICE}`);
+writeFileSync('dist/producto.html', page);
+console.log(`dist/producto.html listo (${(page.length / 1024).toFixed(0)} KB)`);
