@@ -100,7 +100,8 @@ section{padding:48px 0;border-top:1px solid var(--line)}
 .plans{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
 @media (max-width:860px){.plans{grid-template-columns:1fr}}
 .plan h3{text-transform:uppercase}
-.plan .price{font:600 15px var(--f-body);color:var(--muted);margin:4px 0 12px}
+.plan .price{font:500 15px var(--f-body);color:var(--muted);margin:4px 0 12px}
+.plan .price b{font:700 26px var(--f-display);color:var(--ink);letter-spacing:.01em}
 .plan.feat{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
 
 .ia{display:grid;grid-template-columns:1fr auto;gap:24px;align-items:center}
@@ -211,12 +212,13 @@ footer{border-top:1px solid var(--line);padding:22px 0 40px;font-size:13px;color
 
     <section id="licencias" aria-labelledby="h-lic">
       <h2 id="h-lic">Licencias</h2>
-      <p class="intro">Licencia anual por organización, según los módulos y el número de usuarios. Escríbanos y le enviamos la cotización.</p>
+      <p class="intro">Licencia anual por organización, según los módulos y el número de usuarios (3, 10 o 25, o más por cotización). Escríbanos y le enviamos la cotización.</p>
       <div class="plans">
-        <div class="card plan"><h3>Estática</h3><div class="price">Por cotización</div><p class="muted">Medición de tanques y prorrateo a carrotanques.</p></div>
-        <div class="card plan feat"><h3>Total</h3><div class="price">Por cotización</div><p class="muted">Medición estática y oleoducto, en la misma organización.</p></div>
-        <div class="card plan"><h3>Oleoducto</h3><div class="price">Por cotización</div><p class="muted">Balance, pérdidas y compensación volumétrica.</p></div>
+        <div class="card plan"><h3>Estática</h3><div class="price">Desde <b>$7,2 M</b> COP/año</div><p class="muted">Medición de tanques y prorrateo a carrotanques.</p></div>
+        <div class="card plan feat"><h3>Total</h3><div class="price">Desde <b>$17,5 M</b> COP/año</div><p class="muted">Medición estática y oleoducto, en la misma organización.</p></div>
+        <div class="card plan"><h3>Oleoducto</h3><div class="price">Desde <b>$15 M</b> COP/año</div><p class="muted">Balance, pérdidas y compensación volumétrica.</p></div>
       </div>
+      <p class="muted" style="font-size:14px;margin-top:14px">Precios de la licencia de hasta 3 usuarios, antes de IVA. Incluye la implementación de hasta 5 tanques.</p>
       <div class="ctas"><a class="btn primary" href="mailto:contactocustodiaia@gmail.com?subject=Cotizaci%C3%B3n%20Oil%20Static%20Measure&amp;body=Empresa%3A%0ANIT%3A%0AM%C3%B3dulo(s)%3A%0AN%C3%BAmero%20de%20usuarios%3A%0A">Solicitar cotización</a></div>
     </section>
 
