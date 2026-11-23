@@ -1,0 +1,273 @@
+<!doctype html>
+<!--
+  Oil Static Measure · página de producto
+  © 2026 Juan Cohen. Todos los derechos reservados.
+  Contacto comercial: cambie CONTACTO (correo) en los enlaces mailto: de este archivo.
+-->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Oil Static Measure · Medición estática y compensación volumétrica</title>
+<meta name="description" content="Software para medición estática de tanques (API MPMS 3, 11.1, 12.1.1), balance diario de facilidades, prorrateo a carrotanques y compensación volumétrica en oleoductos. Trazabilidad para auditoría, por organización y con segundo factor.">
+<meta property="og:title" content="Oil Static Measure">
+<meta property="og:description" content="Medición estática, balance de facilidades, prorrateo a carrotanques y compensación volumétrica en oleoductos, con trazabilidad para auditoría.">
+<meta property="og:type" content="website">
+<meta name="theme-color" content="#0E5E5B">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230E5E5B'/%3E%3Cpath d='M9 7h14v18H9z' fill='none' stroke='%23fff' stroke-width='2'/%3E%3Cpath d='M9 17h14' stroke='%234FC3B5' stroke-width='2'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root{
+  --bg:#ECEFED; --surface:#FAFBFA; --surface2:#F1F4F2; --ink:#12201D; --muted:#566762; --line:#CAD3CF;
+  --accent:#0E5E5B; --accent-ink:#FFFFFF; --amber:#B86E00; --ok:#17713A; --ok-bg:#DDF3E4;
+  --f-display:"Barlow Condensed","Arial Narrow",sans-serif; --f-body:"IBM Plex Sans",system-ui,sans-serif; --f-mono:"IBM Plex Mono",ui-monospace,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0D1513; --surface:#15201D; --surface2:#1B2825; --ink:#E4EDE9; --muted:#93A59F; --line:#2C3C38;
+  --accent:#4FC3B5; --accent-ink:#06201D; --amber:#F0B04A; --ok:#6CD195; --ok-bg:#12341F; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0D1513; --surface:#15201D; --surface2:#1B2825; --ink:#E4EDE9; --muted:#93A59F; --line:#2C3C38;
+  --accent:#4FC3B5; --accent-ink:#06201D; --amber:#F0B04A; --ok:#6CD195; --ok-bg:#12341F; color-scheme:dark}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 var(--f-body);padding-inline:16px;-webkit-text-size-adjust:100%}
+a{color:var(--accent)}
+.wrap{max-width:1080px;margin:0 auto}
+h1,h2,h3{font-family:var(--f-display);font-weight:700;letter-spacing:.01em;line-height:1.05;margin:0}
+h1{font-size:clamp(38px,6.4vw,64px);text-transform:uppercase}
+h2{font-size:clamp(28px,4vw,38px);text-transform:uppercase;margin-bottom:10px}
+h3{font-size:22px;margin-bottom:6px}
+p{margin:0 0 12px}
+.muted{color:var(--muted)}
+.mono{font-family:var(--f-mono);font-size:.92em}
+
+header.top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 0;border-bottom:1px solid var(--line)}
+.brand{font:700 24px/1 var(--f-display);letter-spacing:.03em;text-transform:uppercase;color:var(--ink);text-decoration:none}
+.brand small{display:block;font:500 11px var(--f-body);letter-spacing:.1em;color:var(--muted);margin-top:3px}
+.navlinks{display:flex;gap:18px;align-items:center;font-size:14px}
+.navlinks a{color:var(--muted);text-decoration:none}.navlinks a:hover{color:var(--ink)}
+@media (max-width:640px){.navlinks .hide-sm{display:none}}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;font:600 15px var(--f-body);padding:12px 20px;border-radius:8px;text-decoration:none;border:1px solid var(--accent);white-space:nowrap}
+.btn.primary{background:var(--accent);color:var(--accent-ink)}
+.btn.primary:hover{filter:brightness(1.08)}
+.btn.ghost{background:transparent;color:var(--accent)}
+.btn.ghost:hover{background:var(--surface)}
+.btn.sm{padding:8px 14px;font-size:14px}
+.ctas{display:flex;flex-wrap:wrap;gap:10px;margin-top:22px}
+
+.hero{display:grid;grid-template-columns:1.1fr .9fr;gap:40px;align-items:center;padding:56px 0 48px}
+.hero .kicker{font:600 13px var(--f-body);letter-spacing:.12em;text-transform:uppercase;color:var(--accent);margin-bottom:14px}
+.hero .lead{font-size:18px;color:var(--muted);max-width:34em;margin-top:18px}
+@media (max-width:860px){.hero{grid-template-columns:1fr;gap:28px;padding:36px 0}}
+
+/* Tiquete de ejemplo: el caso de prueba sintético que reproduce el motor */
+.ticket{background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:0 1px 0 var(--line)}
+.ticket .th{display:flex;justify-content:space-between;gap:8px;padding:12px 16px;border-bottom:1px solid var(--line);font:600 14px var(--f-display);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.ticket .th b{color:var(--ink)}
+.ticket table{width:100%;border-collapse:collapse;font-family:var(--f-mono);font-size:14px}
+.ticket td{padding:7px 16px;border-bottom:1px dashed var(--line)}
+.ticket td:last-child{text-align:right;font-variant-numeric:tabular-nums}
+.ticket tr.total td{font-weight:500;color:var(--accent);border-bottom:0}
+.ticket .tf{padding:10px 16px;font-size:12px;color:var(--muted);background:var(--surface2);border-top:1px solid var(--line)}
+
+section{padding:48px 0;border-top:1px solid var(--line)}
+.intro{max-width:44em;color:var(--muted);margin-bottom:26px}
+.grid{display:grid;gap:16px}
+.g3{grid-template-columns:repeat(3,1fr)}
+.g2{grid-template-columns:repeat(2,1fr)}
+@media (max-width:860px){.g3,.g2{grid-template-columns:1fr}}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:22px}
+.card p:last-child,.card ul:last-child{margin-bottom:0}
+.card ul{margin:10px 0 0;padding-left:18px}
+.card li{margin-bottom:6px}
+.tag{display:inline-block;font:500 12px var(--f-mono);color:var(--accent);background:var(--surface2);border:1px solid var(--line);border-radius:99px;padding:2px 9px;margin:0 4px 6px 0}
+.module h3{font-size:26px;text-transform:uppercase}
+.module .std{margin:8px 0 12px}
+
+.pain{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+@media (max-width:860px){.pain{grid-template-columns:1fr}}
+.pain div{border-left:3px solid var(--amber);padding:4px 0 4px 14px}
+.pain b{display:block;margin-bottom:4px}
+
+.steps{counter-reset:s;display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+@media (max-width:860px){.steps{grid-template-columns:1fr}}
+.steps .card{position:relative;padding-top:52px}
+.steps .card::before{counter-increment:s;content:counter(s);position:absolute;top:16px;left:22px;font:700 28px/1 var(--f-display);color:var(--accent)}
+
+.plans{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+@media (max-width:980px){.plans{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:560px){.plans{grid-template-columns:1fr}}
+.plan h3{text-transform:uppercase}
+.plan .price{font:500 15px var(--f-body);color:var(--muted);margin:4px 0 12px}
+.plan .price b{font:700 26px var(--f-display);color:var(--ink);letter-spacing:.01em}
+.plan.feat{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+
+.ia{display:grid;grid-template-columns:1fr auto;gap:24px;align-items:center}
+@media (max-width:760px){.ia{grid-template-columns:1fr}}
+
+details{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 18px;margin-bottom:10px}
+summary{cursor:pointer;font-weight:600}
+details p{margin:10px 0 0;color:var(--muted)}
+
+.final{text-align:center;padding:64px 0}
+.final .ctas{justify-content:center}
+footer{border-top:1px solid var(--line);padding:22px 0 40px;font-size:13px;color:var(--muted);display:flex;flex-wrap:wrap;gap:8px 20px;justify-content:space-between}
+footer a{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <a class="brand" href="/producto">Oil Static Measure<small>Medición y transferencia de custodia</small></a>
+    <nav class="navlinks" aria-label="Secciones">
+      <a class="hide-sm" href="#modulos">Módulos</a>
+      <a class="hide-sm" href="#seguridad">Trazabilidad</a>
+      <a class="hide-sm" href="#licencias">Licencias</a>
+      <a class="btn ghost sm" href="/">Ingresar</a>
+    </nav>
+  </header>
+
+  <main>
+    <div class="hero">
+      <div>
+        <div class="kicker">Para operadoras, inspección y oleoductos</div>
+        <h1>Cada barril, calculado y trazable</h1>
+        <p class="lead">Medición estática de tanques, balance diario de facilidades, prorrateo a carrotanques y compensación volumétrica en oleoductos, según API MPMS. Sin hojas de Excel con fórmulas rotas, con un registro que resiste una auditoría.</p>
+        <div class="ctas">
+          <a class="btn primary" href="mailto:contactocustodiaia@gmail.com?subject=Demostraci%C3%B3n%20Oil%20Static%20Measure&amp;body=Empresa%3A%0ACargo%3A%0ATel%C3%A9fono%3A%0AM%C3%B3dulo%20de%20inter%C3%A9s%20(est%C3%A1tica%20%2F%20facilidad%20%2F%20oleoducto%20%2F%20total)%3A%0AN%C3%BAmero%20de%20usuarios%3A%0A">Agendar una demostración</a>
+          <a class="btn ghost" href="mailto:contactocustodiaia@gmail.com?subject=Prueba%20gratis%20Oil%20Static%20Measure&amp;body=Empresa%3A%0ANombre%20y%20cargo%3A%0ACorreo%20para%20la%20cuenta%3A%0AM%C3%B3dulos%20a%20probar%20(est%C3%A1tica%20%2F%20facilidad%20%2F%20oleoducto)%3A%0A">Solicitar una prueba gratis</a>
+        </div>
+      </div>
+      <figure class="ticket" style="margin:0" aria-label="Ejemplo de despacho calculado">
+        <div class="th"><span>Despacho · <b>TK001</b></span><span>Caso sintético</span></div>
+        <table>
+          <tr><td>Apertura</td><td>10 420 mm · 153,4 °F</td></tr>
+          <tr><td>Cierre</td><td>9 790 mm · 152,9 °F</td></tr>
+          <tr><td>API · %BSW</td><td>21,3 · 0,35</td></tr>
+          <tr><td>GOV</td><td>2 532,43 bbl</td></tr>
+          <tr><td>GSV</td><td>2 428,89 bbl</td></tr>
+          <tr><td>CSW</td><td>0,99650</td></tr>
+          <tr class="total"><td>NSV</td><td>2 420,39 bbl</td></tr>
+        </table>
+        <div class="tf">Este caso se recalcula en cada versión del software antes de publicarla.</div>
+      </figure>
+    </div>
+
+    <section aria-labelledby="h-pain">
+      <h2 id="h-pain">El problema de siempre</h2>
+      <p class="intro">La medición fiscal y de custodia se sigue haciendo en plantillas que pasan de mano en mano. Funcionan hasta el día en que alguien pregunta de dónde salió una cifra.</p>
+      <div class="pain">
+        <div><b>Fórmulas que nadie revisa</b>Una celda sobrescrita cambia el CTL o el CSW y el error aparece semanas después, en la conciliación.</div>
+        <div><b>Tiquetes que no cuadran</b>La suma de los carrotanques no iguala el despacho del tanque y el ajuste se hace a mano.</div>
+        <div><b>Sin rastro de cambios</b>No queda registro de quién cambió qué ni cuándo, ni de cómo estaba un período antes de cerrarlo.</div>
+      </div>
+    </section>
+
+    <section id="modulos" aria-labelledby="h-mod">
+      <h2 id="h-mod">Tres módulos, una licencia</h2>
+      <p class="intro">Contrate los que necesite. Cada organización trabaja con sus propios tanques, tablas de aforo, crudos y períodos.</p>
+      <div class="grid g3">
+        <article class="card module">
+          <h3>Medición estática</h3>
+          <div class="std"><span class="tag">API MPMS 3</span><span class="tag">11.1 · Tabla 6A/24A</span><span class="tag">12.1.1</span></div>
+          <ul>
+            <li>Nivel adoptado, TOV por tabla de aforo, CTSh y GOV.</li>
+            <li>CTL de crudo, GSV y NSV con CSW, también para tanques de arrendamiento (§15.2.1).</li>
+            <li><b>Prorrateo a carrotanques con ajuste a cero:</b> la suma de GOV, GSV y NSV de las placas iguala el total del despacho, y cada tiquete se puede reproducir por separado.</li>
+            <li>Operación de despacho Lite para captura rápida en campo.</li>
+          </ul>
+        </article>
+        <article class="card module">
+          <h3>Oleoducto</h3>
+          <div class="std"><span class="tag">API MPMS 12.3</span><span class="tag">Compensación por calidad</span></div>
+          <ul>
+            <li>Balance mensual por corriente: N crudos, M puntos de entrada y J de salida.</li>
+            <li>Pérdidas identificables y no identificables con tolerancia, y quién asume el excedente.</li>
+            <li>Contracción teórica por mezcla y compensación volumétrica de suma cero por API y azufre (o valor contractual).</li>
+            <li>Factor de compensación por producto, remitente y cliente, saldos over/short, e importación y exportación a Excel con fórmulas.</li>
+          </ul>
+        </article>
+        <article class="card module">
+          <h3>Balance de facilidad</h3>
+          <div class="std"><span class="tag">Balance de planta</span><span class="tag">API MPMS 3 · 11.1 · 12.1.1</span></div>
+          <ul>
+            <li>Balance diario de una estación o CPF que recibe, procesa, autoconsume y despacha a carrotanques, oleoductos y buques.</li>
+            <li>Inventario inicial y final por tanque, despachos por medición estática y por tiquete, recibos de terceros y autoconsumo.</li>
+            <li><b>Producción teórica</b> del día y diferencia frente a la producción medida, con tolerancia.</li>
+            <li>Acta de balance imprimible, consolidado mensual con control de continuidad de inventarios y exportación a Excel.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section id="seguridad" aria-labelledby="h-seg">
+      <h2 id="h-seg">Hecho para auditoría</h2>
+      <p class="intro">Los controles los aplica la base de datos, no la pantalla. Aunque alguien manipule el navegador, no ve ni modifica lo que no le corresponde.</p>
+      <div class="grid g3">
+        <div class="card"><h3>Registro inalterable</h3><p class="muted">Cada acción queda en una bitácora encadenada con SHA-256, solo de inserción. Cada documento guarda su versión anterior y un período cerrado no se puede borrar.</p></div>
+        <div class="card"><h3>Su información, aislada</h3><p class="muted">Cada organización ve solo sus datos. Roles de visor, analista, administrador y propietario: nadie asigna un rol mayor que el propio.</p></div>
+        <div class="card"><h3>Acceso controlado</h3><p class="muted">Ingreso solo por invitación, con segundo factor obligatorio. La sesión se cierra tras 30 minutos de inactividad.</p></div>
+      </div>
+    </section>
+
+    <section aria-labelledby="h-pasos">
+      <h2 id="h-pasos">Cómo empezamos</h2>
+      <div class="steps">
+        <div class="card"><h3>Demostración</h3><p class="muted">En una llamada de 30 minutos recorremos el flujo con un caso parecido al suyo, o le damos una prueba gratis de 7, 15 o 30 días.</p></div>
+        <div class="card"><h3>Piloto con sus datos</h3><p class="muted">Cargamos uno de sus tanques o un mes de su oleoducto y comparamos contra sus cálculos actuales.</p></div>
+        <div class="card"><h3>Licencia</h3><p class="muted">Activamos su organización. Usted invita a su equipo y define quién puede editar y quién solo consultar.</p></div>
+      </div>
+    </section>
+
+    <section id="licencias" aria-labelledby="h-lic">
+      <h2 id="h-lic">Licencias</h2>
+      <p class="intro">Licencia anual por organización, según los módulos y el número de usuarios (3, 10 o 25, o más por cotización). Escríbanos y le enviamos la cotización.</p>
+      <div class="plans">
+        <div class="card plan"><h3>Estática</h3><div class="price">Desde <b>$7,2 M</b> COP/año</div><p class="muted">Medición de tanques y prorrateo a carrotanques.</p></div>
+        <div class="card plan"><h3>Facilidad</h3><div class="price">Desde <b>$12 M</b> COP/año</div><p class="muted">Balance diario de planta, acta y consolidado mensual.</p></div>
+        <div class="card plan"><h3>Oleoducto</h3><div class="price">Desde <b>$15 M</b> COP/año</div><p class="muted">Balance, pérdidas y compensación volumétrica.</p></div>
+        <div class="card plan feat"><h3>Total</h3><div class="price">Desde <b>$27,5 M</b> COP/año</div><p class="muted">Los tres módulos en la misma organización.</p></div>
+      </div>
+      <p class="muted" style="font-size:14px;margin-top:14px">Precios de la licencia de hasta 3 usuarios, antes de IVA. Incluye la implementación de hasta 5 tanques.</p>
+      <div class="ctas"><a class="btn primary" href="mailto:contactocustodiaia@gmail.com?subject=Cotizaci%C3%B3n%20Oil%20Static%20Measure&amp;body=Empresa%3A%0ANIT%3A%0AM%C3%B3dulo(s)%3A%0AN%C3%BAmero%20de%20usuarios%3A%0A">Solicitar cotización</a></div>
+    </section>
+
+    <section aria-labelledby="h-ia">
+      <div class="card ia">
+        <div>
+          <h2 id="h-ia" style="font-size:30px">Complemento: Custodia IA</h2>
+          <p class="muted" style="margin:0">Un asistente que responde preguntas de medición y transferencia de custodia con base en la normativa pública colombiana y en sus propios documentos, y cita el documento y la página de donde sale cada respuesta.</p>
+        </div>
+        <a class="btn ghost" href="https://custodia-ia.vercel.app" rel="noopener">Conocer Custodia IA</a>
+      </div>
+    </section>
+
+    <section aria-labelledby="h-faq">
+      <h2 id="h-faq">Preguntas frecuentes</h2>
+      <details><summary>¿Los resultados reemplazan mi procedimiento de medición?</summary><p>No. El software aplica los métodos de API MPMS, pero cada empresa debe validar los resultados con su procedimiento y con las ediciones vigentes de las normas API/ASTM antes de usarlos con fines comerciales o fiscales. El piloto sirve justamente para esa comparación.</p></details>
+      <details><summary>¿Dónde quedan mis datos?</summary><p>En una base de datos en la nube, separados por organización. Solo los miembros de su organización con sesión y segundo factor pueden leerlos; ni siquiera el administrador de la plataforma ve los datos de su organización.</p></details>
+      <details><summary>¿Puedo seguir usando Excel?</summary><p>Sí. El módulo de oleoducto importa y exporta Excel, y la exportación conserva las fórmulas para que su equipo pueda revisar cada cifra.</p></details>
+      <details><summary>¿Cuántos usuarios incluye la licencia?</summary><p>Los que usted contrate. El propietario de la organización invita a su equipo hasta ese cupo y asigna a cada persona su rol.</p></details>
+    </section>
+
+    <div class="final">
+      <h2>Vea su propio despacho calculado</h2>
+      <p class="muted">Cuéntenos qué mide y le mostramos el flujo completo con un caso parecido al suyo.</p>
+      <div class="ctas">
+        <a class="btn primary" href="mailto:contactocustodiaia@gmail.com?subject=Demostraci%C3%B3n%20Oil%20Static%20Measure&amp;body=Empresa%3A%0ACargo%3A%0ATel%C3%A9fono%3A%0AM%C3%B3dulo%20de%20inter%C3%A9s%20(est%C3%A1tica%20%2F%20facilidad%20%2F%20oleoducto%20%2F%20total)%3A%0AN%C3%BAmero%20de%20usuarios%3A%0A">Agendar una demostración</a>
+        <a class="btn ghost" href="mailto:contactocustodiaia@gmail.com?subject=Prueba%20gratis%20Oil%20Static%20Measure&amp;body=Empresa%3A%0ANombre%20y%20cargo%3A%0ACorreo%20para%20la%20cuenta%3A%0AM%C3%B3dulos%20a%20probar%20(est%C3%A1tica%20%2F%20facilidad%20%2F%20oleoducto)%3A%0A">Solicitar una prueba gratis</a>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <span>© 2026 Juan Cohen. Todos los derechos reservados.</span>
+    <span><a href="/terminos">Términos</a> · <a href="/privacidad">Datos personales</a> · <a href="/cookies">Cookies</a> · <a href="/pqrs">PQRS</a></span>
+    <span>Los datos de ejemplo son sintéticos y no pertenecen a ningún operador.</span>
+  </footer>
+</div>
+</body>
+</html>

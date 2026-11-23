@@ -9,7 +9,7 @@
 <title>Oil Static Measure</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="vendor/xlsx-0.20.3.full.min.js"></script>
 <style>
 /* Layout: barra de pestañas fija arriba; formulario de medición en dos columnas (apertura | cierre), resultados en tabla de tres columnas, bache de carrotanques a ancho completo. */
 :root{
@@ -98,6 +98,7 @@ footer.legal a{color:var(--accent)}
   <p><b>© 2026 Juan Cohen.</b> Todos los derechos reservados. Oil Static Measure y su código son propiedad del autor; se prohíbe su copia, modificación o distribución sin autorización escrita.</p>
   <p><b>Exención de responsabilidad:</b> herramienta de apoyo con fines informativos. Sus resultados no sustituyen la liquidación oficial, el procedimiento de medición vigente de cada operador ni la validación de un profesional competente. El autor no asume responsabilidad por decisiones comerciales, contractuales o fiscales tomadas con base en estos cálculos. Verifique siempre contra las ediciones vigentes de las normas API MPMS y ASTM.</p>
   <p>Contacto y servicios de automatización: <a href="https://www.linkedin.com/in/juan-cohen-91b175b0" target="_blank" rel="noopener">Juan Cohen en LinkedIn</a></p>
+  <p><a href="/terminos">Términos y condiciones</a> · <a href="/privacidad">Política de tratamiento de datos personales</a> · <a href="/cookies">Política de cookies</a> · <a href="/pqrs">PQRS y habeas data</a></p>
 </footer>
 <noscript><p style="padding:16px">Oil Static Measure requiere JavaScript.</p></noscript>
 </div>
@@ -187,6 +188,13 @@ footer.legal a{color:var(--accent)}
     const tov = R(E.tov(tank.table, p.levelMm), 2);
     let fwv = 0;
     if (p.fwlMm > 0) fwv = R(E.tov(tank.waterTable || tank.table, p.fwlMm), 2);
+    return E.measureTov(tank, Object.assign({}, p, { tov, fwv }));
+  };
+  // Igual que E.measure, pero con el TOV y el agua libre (bbl) ya leídos de la tabla de aforo.
+  // in: {tov, fwv, levelMm?, tempF, api60, bsw, ambF, fra}
+  E.measureTov = function (tank, p) {
+    const tov = R(Number(p.tov), 2), fwv = R(Number(p.fwv || 0), 2);
+    if (!(tov >= 0)) throw new Error('TOV no válido');
     if (fwv > tov) throw new Error('El agua libre excede el TOV');
     const fra = Number(p.fra || 0);
     const tsh = E.shellTemp(p.tempF, p.ambF);
@@ -777,6 +785,258 @@ a.ag-open:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 </script>
 <script>
 /* =====================================================================
+ * FacilityEngine — Balance volumétrico diario de una facilidad
+ * Oil Static Measure · módulo licenciable "facility"
+ *
+ * Una facilidad (estación, CPF, terminal) recibe crudo, lo procesa, consume
+ * parte como combustible y despacha a carrotanques, oleoductos y buques.
+ * El balance diario de cantidad y calidad, en barriles netos (NSV a 60 °F):
+ *
+ *   Producción teórica = Inv. final − Inv. inicial + Despachos + Autoconsumo
+ *                        + Pérdidas identificadas − Recibos de terceros
+ *
+ * Si además se registra la producción medida (fiscalizada en campo), la
+ * diferencia Medida − Teórica es la pérdida (+) o ganancia (−) no
+ * identificada del día, que se compara con la tolerancia.
+ *
+ * Medición estática con OilEngine (API MPMS 3, 11.1 Tabla 6A, 12.1.1):
+ * TOV → (TOV − agua libre)·CTSh = GOV → ×CTL = GSV → ×CSW = NSV.
+ * Despacho por tanque (apertura/cierre): NSV = NSV apertura − NSV cierre, como
+ * en la planilla de balance de planta (predeterminado), o ΔGSV × CSW según
+ * API MPMS 12.1.1 §15.2.1 (configurable). Difieren a lo sumo en centésimas.
+ * Los carrotanques cargados desde un tanque durante su movimiento estático
+ * ya están dentro de ese movimiento: se descuentan de su destino principal.
+ *
+ * Motor puro (sin DOM): window.FacilityEngine en el navegador, require en Node.
+ * Sumas en centésimas de barril (enteros) para cuadrar exacto.
+ * ===================================================================== */
+(function (root) {
+  'use strict';
+  const F = {};
+  F.VERSION = '1.0.0';
+  const toC = (x) => Math.round(Number(Number(x).toPrecision(15)) * 100);
+  const toB = (c) => c / 100;
+  // Números como los escribe el usuario: «1.234,56», «1234,56» o «1234.56».
+  const num = (v) => {
+    if (v === null || v === undefined) return NaN; if (typeof v === 'number') return v;
+    let s = String(v).trim().replace(/\s/g, ''); if (s === '') return NaN;
+    s = s.includes(',') && s.includes('.') ? s.replace(/\./g, '').replace(',', '.') : s.replace(',', '.');
+    return Number(s);
+  };
+  F.num = num;
+  const has = (v) => isFinite(num(v));
+
+  F.DESTS = { carrotanques: 'Carrotanques', oleoducto: 'Oleoducto', buque: 'Buque' };
+  F.REC_TYPES = { carrotanque: 'Carrotanque (guía)', oleoducto: 'Oleoducto', buque: 'Buque', otro: 'Otro' };
+  F.STATES = { R: 'Recibiendo', D: 'Despachando', DR: 'Recibe y despacha', V: 'Reposo', F: 'Fiscalización / drenaje', FS: 'Fuera de servicio' };
+  F.defaults = () => ({ facility: '', tolPct: 0.5, nsvMode: 'nsv_diff', bswMode: 'open' });
+
+  // Una medición de tanque. t: tanque de la facilidad {id, name, alpha, tBase}; table: tabla de aforo o null.
+  F.measure = function (E, t, table, m, tag) {
+    const err = [];
+    const tl = num(m.tl), ta = num(m.ta), api = num(m.api), bsw = num(m.bsw), lv = num(m.level);
+    if (!isFinite(tl)) err.push(tag + ': falta la temperatura del líquido.');
+    if (!isFinite(api)) err.push(tag + ': falta la gravedad API a 60 °F.');
+    if (!(bsw >= 0 && bsw < 100)) err.push(tag + ': el %BSW debe estar entre 0 y 100.');
+    const useTable = table && isFinite(lv) && !has(m.tov);
+    if (!useTable && !has(m.tov)) err.push(tag + ': ingrese el TOV o un nivel con tabla de aforo.');
+    if (err.length) return { err };
+    const tank = { table, alpha: has(t.alpha) ? num(t.alpha) : 6.2e-6, tBase: has(t.tBase) ? num(t.tBase) : 60 };
+    const p = { levelMm: lv, tempF: tl, ambF: isFinite(ta) ? ta : '', api60: api, bsw, fra: 0 };
+    try {
+      if (useTable) return E.measure(tank, Object.assign(p, { fwlMm: num(m.fwl) || 0 }));
+      let fwv = num(m.fwv) || 0;
+      if (!fwv && num(m.fwl) > 0 && table) fwv = E.round(E.tov(table, num(m.fwl)), 2);
+      return E.measureTov(tank, Object.assign(p, { tov: num(m.tov), fwv }));
+    } catch (e) { return { err: [tag + ': ' + e.message] }; }
+  };
+
+  const sumC = (rows, k) => rows.reduce((s, r) => s + toC(r[k] || 0), 0);
+  const wavg = (rows, k, w) => { let a = 0, b = 0; rows.forEach((r) => { const x = num(r[k]), y = num(r[w]); if (isFinite(x) && y > 0) { a += x * y; b += y; } }); return b > 0 ? E_round(a / b, k === 'api' || k === 'api60' ? 1 : 3) : null; };
+  let E_round = (x, n) => Math.round(x * 10 ** n) / 10 ** n;
+
+  // Volúmenes de un tiquete, recibo o producción: GOV/GSV/NSV ingresados; NSV calculado si falta (GSV × CSW).
+  function ticketVol(r, tag, err) {
+    const gov = num(r.gov), gsv = num(r.gsv), bsw = num(r.bsw);
+    let nsv = num(r.nsv);
+    if (!isFinite(nsv) && isFinite(gsv) && bsw >= 0) nsv = E_round(gsv * E_round((100 - bsw) / 100, 5), 2);
+    if (!isFinite(nsv)) { err.push(tag + ': ingrese el NSV (o el GSV y el %BSW).'); return null; }
+    if (nsv < 0) { err.push(tag + ': el NSV no puede ser negativo.'); return null; }
+    if (isFinite(gsv) && nsv > gsv + 0.005) err.push(tag + ': el NSV no puede ser mayor que el GSV.');
+    return { gov: isFinite(gov) ? gov : null, gsv: isFinite(gsv) ? gsv : null, nsv, api: has(r.api) ? num(r.api) : null, bsw: isFinite(bsw) ? bsw : null };
+  }
+
+  /* d: { cfg, tanks:[{id,name,ref,alpha,tBase}], invIni:[], invFin:[], moves:[], tickets:[], rec:[], prod:[], cons:[], loss:[] }
+     E: OilEngine; tableOf(ref): tabla de aforo del tanque vinculado o null. */
+  F.compute = function (d, E, tableOf) {
+    E_round = E.round;
+    const cfg = Object.assign(F.defaults(), d.cfg || {});
+    const err = [], warn = [];
+    const tk = {}; (d.tanks || []).forEach((t) => (tk[t.id] = t));
+    const nameOf = (id) => (tk[id] ? tk[id].name || id : id || '—');
+    const tableFor = (id) => (tk[id] && tk[id].ref && tableOf ? tableOf(tk[id].ref) : null);
+
+    // ---- Inventarios ----
+    const inv = (rows, label) => {
+      const out = [];
+      (rows || []).forEach((r, i) => {
+        if (!r.tank) return;
+        if (!tk[r.tank]) { err.push(label + ', fila ' + (i + 1) + ': el tanque ' + r.tank + ' no está en los maestros.'); return; }
+        const empty = !has(r.level) && !has(r.tov);
+        if (empty) return;
+        const m = F.measure(E, tk[r.tank], tableFor(r.tank), r, label + ' ' + nameOf(r.tank));
+        if (m.err) { err.push(...m.err); return; }
+        out.push(Object.assign({ tank: r.tank, name: nameOf(r.tank), state: r.state || '' }, m));
+      });
+      const seen = {}; out.forEach((x) => { if (seen[x.tank]) err.push(label + ': el tanque ' + x.name + ' aparece dos veces.'); seen[x.tank] = 1; });
+      const tot = { gov: toB(sumC(out, 'gov')), gsv: toB(sumC(out, 'gsv')), nsv: toB(sumC(out, 'nsv')), fwv: toB(sumC(out, 'fwv')), api: wavg(out, 'api60', 'gsv'), bsw: wavg(out, 'bsw', 'gsv') };
+      return { rows: out, tot };
+    };
+    const ini = inv(d.invIni, 'Inventario inicial'), fin = inv(d.invFin, 'Inventario final');
+    const iniT = {}, finT = {}; ini.rows.forEach((r) => (iniT[r.tank] = r)); fin.rows.forEach((r) => (finT[r.tank] = r));
+    (d.tanks || []).forEach((t) => { if (iniT[t.id] && !finT[t.id]) warn.push('El tanque ' + nameOf(t.id) + ' tiene inventario inicial pero no final.'); if (finT[t.id] && !iniT[t.id]) warn.push('El tanque ' + nameOf(t.id) + ' tiene inventario final pero no inicial.'); });
+
+    // ---- Despachos por medición estática (apertura / cierre) ----
+    const moves = [];
+    (d.moves || []).forEach((mv, i) => {
+      const tag = 'Despacho ' + (i + 1) + (mv.tank ? ' (' + nameOf(mv.tank) + ')' : '');
+      if (!mv.tank) return;
+      if (!tk[mv.tank]) { err.push(tag + ': el tanque no está en los maestros.'); return; }
+      if (!F.DESTS[mv.dest]) { err.push(tag + ': elija el destino (carrotanques, oleoducto o buque).'); return; }
+      const o = F.measure(E, tk[mv.tank], tableFor(mv.tank), mv.open || {}, tag + ', apertura');
+      const c = F.measure(E, tk[mv.tank], tableFor(mv.tank), Object.assign({}, mv.close || {}, { api: has((mv.close || {}).api) ? mv.close.api : (mv.open || {}).api, bsw: has((mv.close || {}).bsw) ? mv.close.bsw : (mv.open || {}).bsw }), tag + ', cierre');
+      if (o.err || c.err) { err.push(...(o.err || []), ...(c.err || [])); return; }
+      if (c.gsv > o.gsv) { err.push(tag + ': el cierre (' + c.gsv + ' bbl GSV) es mayor que la apertura (' + o.gsv + '): no es un despacho.'); return; }
+      const D = E.dispatch(o, c, { bswMode: cfg.bswMode });
+      const nsv = cfg.nsvMode === 'nsv_diff' ? D.nsvDiff : D.nsv;
+      moves.push({ i, tank: mv.tank, name: nameOf(mv.tank), dest: mv.dest, ref: mv.ref || '', open: o, close: c, gov: D.gov, gsv: D.gsv, csw: D.csw, nsv, api: D.api60, bsw: D.bswUsed, linked: { gov: 0, gsv: 0, nsv: 0, n: 0 } });
+    });
+    const moveOf = {}; moves.forEach((m) => { if (moveOf[m.tank]) warn.push('El tanque ' + m.name + ' tiene dos despachos estáticos en el día: verifique que no se solapen.'); moveOf[m.tank] = moveOf[m.tank] || m; });
+
+    // ---- Tiquetes (carrotanques, medidor de oleoducto o buque) ----
+    const tickets = [];
+    (d.tickets || []).forEach((t, i) => {
+      if (!t.dest && !has(t.nsv) && !has(t.gsv)) return;
+      const tag = 'Tiquete ' + (i + 1) + (t.ref ? ' (' + t.ref + ')' : '');
+      if (!F.DESTS[t.dest]) { err.push(tag + ': elija el destino.'); return; }
+      if (t.tank && !tk[t.tank]) { err.push(tag + ': el tanque ' + t.tank + ' no está en los maestros.'); return; }
+      const v = ticketVol(t, tag, err); if (!v) return;
+      const mv = t.tank ? moveOf[t.tank] : null;
+      if (mv && t.dest === mv.dest) { warn.push(tag + ': tiene el mismo destino que el despacho estático del tanque ' + mv.name + '; se cuenta dentro de ese movimiento.'); }
+      if (mv) { mv.linked.n++; ['gov', 'gsv', 'nsv'].forEach((k) => (mv.linked[k] = toB(toC(mv.linked[k]) + toC(v[k] || 0)))); }
+      tickets.push(Object.assign({ i, dest: t.dest, tank: t.tank || '', name: t.tank ? nameOf(t.tank) : '', ref: t.ref || '', inMove: !!mv }, v));
+    });
+
+    // ---- Despachos por destino ----
+    const by = {}; Object.keys(F.DESTS).forEach((k) => (by[k] = { gov: 0, gsv: 0, nsv: 0, n: 0 }));
+    const addTo = (k, g, s, n) => { by[k].gov += toC(g || 0); by[k].gsv += toC(s || 0); by[k].nsv += toC(n || 0); by[k].n++; };
+    moves.forEach((m) => {
+      const rest = { gov: toC(m.gov) - toC(m.linked.gov), gsv: toC(m.gsv) - toC(m.linked.gsv), nsv: toC(m.nsv) - toC(m.linked.nsv) };
+      if (rest.nsv < 0) err.push('Despacho del tanque ' + m.name + ': los tiquetes asociados (' + m.linked.nsv + ' bbl NSV) superan el movimiento medido (' + m.nsv + ' bbl).');
+      m.main = { gov: toB(rest.gov), gsv: toB(rest.gsv), nsv: toB(rest.nsv) };
+      addTo(m.dest, m.main.gov, m.main.gsv, m.main.nsv);
+    });
+    tickets.forEach((t) => addTo(t.dest, t.gov, t.gsv, t.nsv));
+    Object.values(by).forEach((x) => { x.gov = toB(x.gov); x.gsv = toB(x.gsv); x.nsv = toB(x.nsv); });
+    const despC = moves.reduce((s, m) => s + toC(m.nsv), 0) + tickets.filter((t) => !t.inMove).reduce((s, t) => s + toC(t.nsv), 0);
+    // Por tanque: el movimiento medido, o la suma de sus tiquetes si no tuvo movimiento estático.
+    const byTank = {};
+    moves.forEach((m) => { byTank[m.tank] = byTank[m.tank] || { name: m.name, nsv: 0, carrotanques: 0, oleoducto: 0, buque: 0 }; byTank[m.tank].nsv += toC(m.nsv); byTank[m.tank][m.dest] += toC(m.main.nsv); });
+    tickets.filter((t) => t.tank).forEach((t) => { byTank[t.tank] = byTank[t.tank] || { name: t.name, nsv: 0, carrotanques: 0, oleoducto: 0, buque: 0 }; if (!t.inMove) byTank[t.tank].nsv += toC(t.nsv); byTank[t.tank][t.dest] += toC(t.nsv); });
+    const tanksOut = Object.entries(byTank).map(([id, x]) => ({ tank: id, name: x.name, nsv: toB(x.nsv), carrotanques: toB(x.carrotanques), oleoducto: toB(x.oleoducto), buque: toB(x.buque) }));
+
+    // ---- Recibos, producción medida, autoconsumo, pérdidas identificadas ----
+    const simple = (rows, label, keyName) => {
+      const out = [];
+      (rows || []).forEach((r, i) => {
+        if (!has(r.nsv) && !has(r.gsv) && !(r[keyName] || '').trim()) return;
+        const v = ticketVol(r, label + ' ' + (i + 1) + (r[keyName] ? ' (' + r[keyName] + ')' : ''), err); if (!v) return;
+        out.push(Object.assign({}, r, v));
+      });
+      return out;
+    };
+    const rec = simple(d.rec, 'Recibo', 'origin'), prod = simple(d.prod, 'Producción medida', 'source');
+    const cons = simple(d.cons, 'Autoconsumo', 'concept'), loss = simple(d.loss, 'Pérdida identificada', 'concept');
+    const recC = sumC(rec, 'nsv'), prodC = sumC(prod, 'nsv'), consC = sumC(cons, 'nsv'), lossC = sumC(loss, 'nsv');
+    const iniC = toC(ini.tot.nsv), finC = toC(fin.tot.nsv);
+
+    // ---- Balance ----
+    const teoC = finC - iniC + despC + consC + lossC - recC;
+    const measured = prod.length > 0;
+    const diffC = measured ? prodC - teoC : null;            // + pérdida no identificada, − ganancia
+    const baseC = measured ? prodC + recC : 0;
+    const pct = measured && baseC > 0 ? E.round((diffC / baseC) * 100, 4) : null;
+    const tol = num(cfg.tolPct);
+    const inTol = measured ? (isFinite(tol) ? Math.abs(pct) <= tol : true) : null;
+    if (teoC < 0) warn.push('La producción teórica es negativa (' + toB(teoC) + ' bbl): revise inventarios, despachos y recibos.');
+    if (!ini.rows.length) warn.push('No hay inventario inicial.');
+    if (!fin.rows.length) warn.push('No hay inventario final.');
+
+    const qual = (rows) => ({ api: wavg(rows, 'api', 'gsv'), bsw: wavg(rows, 'bsw', 'gsv') });
+    const despRows = moves.map((m) => ({ api: m.api, bsw: m.bsw, gsv: m.gsv })).concat(tickets.filter((t) => !t.inMove && t.gsv).map((t) => ({ api: t.api, bsw: t.bsw, gsv: t.gsv })));
+
+    const bal = {
+      ini: toB(iniC), fin: toB(finC), desp: toB(despC), cons: toB(consC), loss: toB(lossC), rec: toB(recC),
+      teo: toB(teoC), prod: measured ? toB(prodC) : null, diff: measured ? toB(diffC) : null, pct, tol: isFinite(tol) ? tol : null, inTol,
+      // Cuadre de cierre (debe ser cero): Ini + Producción teórica + Recibos − Despachos − Consumos − Pérdidas − Final
+      check: toB(iniC + teoC + recC - despC - consC - lossC - finC)
+    };
+    const quality = { ini: { api: ini.tot.api, bsw: ini.tot.bsw }, fin: { api: fin.tot.api, bsw: fin.tot.bsw }, desp: qual(despRows), rec: qual(rec), prod: qual(prod) };
+    return { ok: !err.length, err, warn, cfg, ini, fin, moves, tickets, by, tanksOut, rec, prod, cons, loss, bal, quality, engine: F.VERSION };
+  };
+
+  // Día siguiente: el inventario final pasa a ser el inicial; maestros y configuración se conservan.
+  F.nextDay = function (d) {
+    const copy = (x) => JSON.parse(JSON.stringify(x || []));
+    return { cfg: Object.assign({}, d.cfg), tanks: copy(d.tanks), invIni: copy(d.invFin), invFin: copy(d.invFin).map((r) => ({ tank: r.tank, state: r.state, level: '', tov: '', fwl: '', fwv: '', tl: '', ta: '', api: r.api, bsw: r.bsw })), moves: [], tickets: [], rec: [], prod: [], cons: [], loss: [] };
+  };
+
+  // Consolidado: días guardados en orden; continuidad Inv. inicial(día) = Inv. final(día anterior).
+  F.consolidate = function (days) {
+    const l = days.slice().sort((a, b) => (a.date < b.date ? -1 : 1));
+    let prev = null; const rows = l.map((x) => {
+      const s = x.summary || {}; const r = { date: x.date, status: x.status, rev: x.rev, ini: s.ini, fin: s.fin, desp: s.desp, cons: s.cons, loss: s.loss || 0, rec: s.rec, teo: s.teo, prod: s.prod, diff: s.diff };
+      r.gap = prev && prev.fin !== undefined ? E_round((r.ini || 0) - (prev.fin || 0), 2) : 0; prev = r; return r; });
+    const t = (k) => toB(rows.reduce((s, r) => s + toC(r[k] || 0), 0));
+    const tot = { desp: t('desp'), cons: t('cons'), loss: t('loss'), rec: t('rec'), teo: t('teo'), prod: rows.some((r) => r.prod !== null && r.prod !== undefined) ? t('prod') : null, diff: rows.some((r) => r.diff !== null && r.diff !== undefined) ? t('diff') : null,
+      ini: rows.length ? rows[0].ini : 0, fin: rows.length ? rows[rows.length - 1].fin : 0 };
+    return { rows, tot, gaps: rows.filter((r) => r.gap !== 0) };
+  };
+
+  // Ejemplo sintético (no pertenece a ningún operador): CPF con 6 tanques, despachos a oleoducto,
+  // carrotanques y buque, crudo de terceros por carrotanque, autoconsumo y producción fiscalizada.
+  F.demo = function () {
+    const T = (id, name) => ({ id, name, ref: '', alpha: '6.2e-6', tBase: '60' });
+    const m = (tank, state, tov, tl, ta, api, bsw) => ({ tank, state, level: '', tov: String(tov), fwl: '', fwv: '0', tl: String(tl), ta: String(ta), api: String(api), bsw: String(bsw) });
+    return {
+      cfg: { facility: 'CPF Demostración', tolPct: '0.5', nsvMode: 'nsv_diff', bswMode: 'open' },
+      tanks: [T('TK-101', 'TK-101 Almacenamiento'), T('TK-102', 'TK-102 Almacenamiento'), T('TK-201', 'TK-201 Despacho'), T('TK-202', 'TK-202 Despacho'), T('TK-301', 'TK-301 Recibo terceros'), T('TK-401', 'TK-401 Muelle')],
+      invIni: [m('TK-101', 'R', 48210.55, 163.8, 78, 15.2, 0.42), m('TK-102', 'V', 31560.2, 158.4, 80, 15.4, 0.38), m('TK-201', 'D', 29880.4, 161.2, 79, 15.1, 0.47),
+        m('TK-202', 'DR', 27410.9, 162.5, 79, 15.3, 0.45), m('TK-301', 'R', 2950.15, 98.6, 77, 18.9, 0.6), m('TK-401', 'D', 64220.0, 140.3, 82, 15.2, 0.4)],
+      invFin: [m('TK-101', 'D', 30115.25, 160.9, 74, 15.2, 0.42), m('TK-102', 'R', 50120.7, 164.7, 73, 15.3, 0.4), m('TK-201', 'R', 28770.3, 162.1, 73, 15.2, 0.46),
+        m('TK-202', 'D', 18600.45, 160.2, 73, 15.3, 0.45), m('TK-301', 'F', 3315.6, 99.1, 75, 18.9, 0.58), m('TK-401', 'V', 39880.0, 138.8, 76, 15.2, 0.4)],
+      moves: [
+        { tank: 'TK-201', dest: 'oleoducto', ref: 'Boleta ODL-1201', open: { level: '', tov: '29880.4', fwv: '0', tl: '161.2', ta: '79', api: '15.1', bsw: '0.47' }, close: { level: '', tov: '15630.8', fwv: '0', tl: '159.6', ta: '74' } },
+        { tank: 'TK-202', dest: 'oleoducto', ref: 'Boleta ODL-1202', open: { level: '', tov: '27410.9', fwv: '0', tl: '162.5', ta: '79', api: '15.3', bsw: '0.45' }, close: { level: '', tov: '18600.45', fwv: '0', tl: '160.2', ta: '73' } },
+        { tank: 'TK-401', dest: 'buque', ref: 'B/L 0457 · M/T Demostración', open: { level: '', tov: '64220.0', fwv: '0', tl: '140.3', ta: '82', api: '15.2', bsw: '0.4' }, close: { level: '', tov: '39880.0', fwv: '0', tl: '138.8', ta: '76' } }
+      ],
+      tickets: [
+        { dest: 'carrotanques', tank: 'TK-202', ref: 'TQ-5501 · placa SXA-101', gov: '218.40', gsv: '208.92', nsv: '207.98', api: '15.3', bsw: '0.45' },
+        { dest: 'carrotanques', tank: 'TK-202', ref: 'TQ-5502 · placa SXB-202', gov: '221.10', gsv: '211.43', nsv: '210.48', api: '15.3', bsw: '0.45' },
+        { dest: 'carrotanques', tank: 'TK-202', ref: 'TQ-5503 · placa SXC-303', gov: '219.75', gsv: '210.20', nsv: '209.25', api: '15.3', bsw: '0.45' }
+      ],
+      rec: [{ type: 'carrotanque', origin: 'Campo vecino (tercero)', ref: 'Guía G-8812', gov: '', gsv: '403.15', nsv: '400.73', api: '18.9', bsw: '0.6' }],
+      prod: [{ source: 'Medidores de fiscalización de pozos', ref: '', gov: '', gsv: '', nsv: '13070.00', api: '15.2', bsw: '' }],
+      cons: [{ concept: 'Calentadores y hornos', ref: '', nsv: '84.20' }, { concept: 'Generación eléctrica', ref: '', nsv: '22.80' }],
+      loss: []
+    };
+  };
+
+  if (typeof module !== 'undefined') module.exports = F; else root.FacilityEngine = F;
+})(typeof window !== 'undefined' ? window : globalThis);
+</script>
+<script>
+/* =====================================================================
  * Capa de plataforma (organizaciones y licencias) + Módulo "Compensación
  * volumétrica en oleoductos". Se registra en window.OSM_EXT; la app
  * principal le entrega un puente (api) al dibujar la pestaña.
@@ -791,10 +1051,12 @@ a.ag-open:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   /* ------------------------- Plataforma ------------------------- */
   const MODULES = {
     static: { name: 'Medición estática y prorrateo a carrotanques', std: 'API MPMS 3 · 11.1 · 12.1.1' },
-    pipeline: { name: 'Compensación volumétrica en oleoductos', std: 'API MPMS 11.1 · 12.3 · Manual del Transportador' }
+    pipeline: { name: 'Compensación volumétrica en oleoductos', std: 'API MPMS 11.1 · 12.3 · Manual del Transportador' },
+    facility: { name: 'Balance volumétrico de facilidad', std: 'API MPMS 3 · 11.1 · 12.1.1 · Balance de planta' }
   };
+  const MOD_SHORT = { static: 'Estática', pipeline: 'Oleoducto', facility: 'Facilidad' };
   const LSK = 'osm.org.v1';
-  const DEFAULT_ORG = { id: 'org-prueba', name: 'Organización de prueba', type: 'Operadora', plan: 'Total (prueba)', modules: ['static', 'pipeline'], validTo: '', seats: 5, virtual: true };
+  const DEFAULT_ORG = { id: 'org-prueba', name: 'Organización de prueba', type: 'Operadora', plan: 'Total (prueba)', modules: ['static', 'pipeline', 'facility'], validTo: '', seats: 5, virtual: true };
   const PL = {
     MODULES,
     orgs(S) { const l = Object.values(S.cache.platform || {}).filter((o) => o && o.id); return l.length ? l.sort((a, b) => a.name.localeCompare(b.name)) : (window.OSM_SESSION ? [] : [DEFAULT_ORG]); },
@@ -821,7 +1083,7 @@ a.ag-open:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     </section>
     <section class="card"><div class="row"><h2 style="margin-right:auto">Organizaciones y licencias</h2>${adm ? '<button class="b" id="plAdd">Agregar organización</button>' : ''}</div>
       ${adm ? '' : '<div class="msg info">Solo el propietario del espacio puede crear organizaciones o cambiar licencias.</div>'}
-      <div class="tw"><table><thead><tr><th class="t">Organización</th><th class="t">NIT</th><th class="t">Tipo</th><th class="t">Plan</th>${Object.keys(MODULES).map((k) => `<th>${k === 'static' ? 'Estática' : 'Oleoducto'}</th>`).join('')}<th>Usuarios</th><th class="t">Vence</th>${adm ? '<th></th>' : ''}</tr></thead><tbody>
+      <div class="tw"><table><thead><tr><th class="t">Organización</th><th class="t">NIT</th><th class="t">Tipo</th><th class="t">Plan</th>${Object.keys(MODULES).map((k) => `<th>${MOD_SHORT[k] || k}</th>`).join('')}<th>Usuarios</th><th class="t">Vence</th>${adm ? '<th></th>' : ''}</tr></thead><tbody>
       ${orgs.map((o) => `<tr data-org="${esc(o.id)}"><td class="t"><input class="txt" data-of="name" value="${esc(o.name)}" ${adm ? '' : 'disabled'} aria-label="Nombre"></td>
         <td class="t"><input class="txt" data-of="nit" value="${esc(o.nit || '')}" ${adm ? '' : 'disabled'} style="width:120px" aria-label="NIT"></td>
         <td class="t"><select data-of="type" ${adm ? '' : 'disabled'}>${['Operadora', 'Inspección', 'Oleoducto', 'Otro'].map((t) => `<option ${t === o.type ? 'selected' : ''}>${t}</option>`).join('')}</select></td>
@@ -832,8 +1094,9 @@ a.ag-open:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
         ${adm ? `<td><button class="b s" data-osave="${esc(o.id)}">Guardar</button></td>` : ''}</tr>`).join('')}
       </tbody></table></div>
       <div class="note">${window.OSM_SESSION ? 'Las licencias se aplican en el servidor: sin licencia vigente, la base de datos rechaza la lectura y escritura del módulo. Solo el administrador de la plataforma las modifica, y no puede ver los datos de las organizaciones de las que no es miembro.' : 'Modo demostración: organizaciones y licencias se guardan solo en este navegador.'}</div>
-    </section>${teamSection()}`;
+    </section>${trialsSection()}${clientAccessSection(orgs)}${teamSection()}`;
     if (window.OSM_SESSION) loadTeam();
+    if (window.OSM_SESSION && window.OSM_SESSION.platformAdmin) loadTrials();
   }
   const ROLES = [['viewer', 'Visor'], ['analyst', 'Analista'], ['admin', 'Administrador'], ['owner', 'Propietario']];
   const RANK = { viewer: 1, analyst: 2, admin: 3, owner: 4 };
@@ -862,6 +1125,100 @@ a.ag-open:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
         ${inv.map((i) => `<tr><td class="t mono">${esc(i.email)}</td><td class="t">${esc(i.display_name)}</td><td class="t">${esc(rl(i.role))}</td><td class="t mono">${esc(String(i.expires_at).slice(0, 10))}</td><td><button class="b s" type="button" data-tmrev="${esc(i.id)}">Revocar</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="note">No hay invitaciones pendientes.</div>'}`;
     } catch (err) { el.innerHTML = `<div class="msg bad">${esc(err.message)}</div>`; }
   }
+  /* Pruebas gratis (7, 15 o 30 días calendario): las asigna el administrador de la plataforma.
+     La base crea la organización, las licencias con vencimiento y la invitación en una sola
+     transacción (public.admin_grant_trial) y exige segundo factor y rol de administrador. */
+  const MOD_LABEL = { static: 'Estática', pipeline: 'Oleoducto', facility: 'Facilidad' };
+  const fdate = (d) => { if (!d) return '—'; const [y, m, dd] = String(d).slice(0, 10).split('-'); return dd + '/' + m + '/' + y; };
+  function trialsSection() {
+    const SS = window.OSM_SESSION; if (!SS || !SS.platformAdmin) return '';
+    return `<section class="card"><h2>Pruebas gratis</h2>
+      <div class="note">Dé acceso de prueba a un correo. Se crea la organización con los módulos elegidos, que vencen al terminar el último día de la prueba (hora de Colombia), y la persona queda invitada como propietaria. Si ya tiene cuenta, entra directo.</div>
+      <form id="trForm" class="grid" novalidate>
+        <label class="f"><span>Correo</span><input id="trEmail" type="email" maxlength="160" required></label>
+        <label class="f"><span>Nombre completo</span><input id="trName" maxlength="120" required></label>
+        <label class="f"><span>Empresa</span><input id="trOrg" maxlength="120" required></label>
+        <label class="f"><span>Tipo</span><select id="trType">${['Operadora', 'Inspección', 'Oleoducto', 'Otro'].map((t) => `<option>${t}</option>`).join('')}</select></label>
+        <label class="f"><span>Duración</span><select id="trDays"><option value="7">7 días</option><option value="15" selected>15 días</option><option value="30">30 días</option></select></label>
+        <label class="f"><span>Usuarios</span><input id="trSeats" inputmode="numeric" value="3"></label>
+        <fieldset class="f" style="border:0;padding:0;margin:0"><span>Módulos</span><div class="row" style="gap:12px">${Object.entries(MOD_LABEL).map(([k, l]) => `<label style="display:inline-flex;gap:6px;align-items:center"><input type="checkbox" data-trmod="${k}" checked style="width:auto">${l}</label>`).join('')}</div></fieldset>
+        <label class="f"><span>Nota interna (opcional)</span><input id="trNote" maxlength="300"></label>
+        <div class="row"><button class="b p" type="submit">Dar prueba gratis</button></div>
+      </form>
+      <div id="trList"><div class="note">Cargando pruebas…</div></div></section>`;
+  }
+  async function loadTrials() {
+    const el = document.getElementById('trList'); if (!el) return;
+    try {
+      const l = await window.OSM_SESSION.call('/rest/v1/rpc/admin_list_trials', { method: 'POST', body: {} }) || [];
+      el.innerHTML = l.length ? `<div class="tw"><table><thead><tr><th class="t">Correo</th><th class="t">Empresa</th><th class="t">Módulos</th><th>Usuarios</th><th class="t">Desde</th><th class="t">Hasta (incl.)</th><th class="t">Estado</th><th class="t">Acciones</th></tr></thead><tbody>
+        ${l.map((t) => `<tr><td class="t mono">${A.esc(t.email)}</td><td class="t">${A.esc(t.org || '—')}</td><td class="t">${A.esc((t.modules || []).map((m) => MOD_LABEL[m] || m).join(', '))}</td><td>${A.esc(t.seats)}</td>
+          <td class="t mono">${fdate(t.starts_on)}</td><td class="t mono">${fdate(t.ends_on)}</td>
+          <td class="t">${t.active ? `<span class="chip ok">Vigente · ${A.esc(t.days_left)} día${t.days_left === 1 ? '' : 's'}</span>` : '<span class="chip bad">Vencida</span>'}${t.joined ? '' : ' <span class="chip warn">Sin activar</span>'}</td>
+          <td class="t"><div class="row" style="gap:6px;flex-wrap:nowrap"><select data-trsel="${A.esc(t.id)}" aria-label="Días a prorrogar"><option value="7">+7</option><option value="15">+15</option><option value="30">+30</option><option value="-7">−7</option></select><button class="b s" data-trext="${A.esc(t.id)}">Aplicar</button>${t.active ? `<button class="b s" data-trend="${A.esc(t.id)}">Terminar</button>` : ''}</div></td></tr>`).join('')}
+        </tbody></table></div>` : '<div class="note">Aún no ha dado pruebas gratis.</div>';
+    } catch (err) { el.innerHTML = `<div class="msg bad">${A.esc(err.message)}</div>`; }
+  }
+  document.addEventListener('submit', async (e) => {
+    if (e.target.id !== 'trForm' || !window.OSM_SESSION || !window.OSM_SESSION.platformAdmin) return; e.preventDefault();
+    const v = (id) => document.getElementById(id).value.trim();
+    const mods = [...document.querySelectorAll('[data-trmod]')].filter((i) => i.checked).map((i) => i.dataset.trmod);
+    const em = v('trEmail').toLowerCase(), seats = Number(v('trSeats'));
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) return A.toast('Escriba un correo válido.', 'warn');
+    if (v('trName').length < 2 || v('trOrg').length < 2) return A.toast('Escriba el nombre de la persona y de la empresa.', 'warn');
+    if (!mods.length) return A.toast('Elija al menos un módulo.', 'warn');
+    if (!(seats >= 1 && seats <= 10 && Number.isInteger(seats))) return A.toast('Los usuarios van de 1 a 10.', 'warn');
+    const btn = e.target.querySelector('button[type=submit]'); btn.disabled = true;
+    try {
+      const r = await window.OSM_SESSION.call('/rest/v1/rpc/admin_grant_trial', { method: 'POST', body: { p_email: em, p_name: v('trName'), p_org_name: v('trOrg'), p_days: Number(v('trDays')), p_modules: mods, p_seats: seats, p_org_type: v('trType'), p_note: v('trNote') || null } });
+      e.target.reset();
+      A.toast(r.existing_account ? `Prueba asignada hasta el ${fdate(r.ends_on)}: ${em} ya tenía cuenta y verá la organización al ingresar.` : `Prueba asignada hasta el ${fdate(r.ends_on)}. Pídale a ${em} que entre al sitio, elija «Activar mi invitación» y use ese correo.`, 'ok');
+      loadTrials();
+    } catch (err) { A.toast(err.message, 'bad'); }
+    finally { btn.disabled = false; }
+  });
+  document.addEventListener('click', async (e) => {
+    const b = e.target.closest('button'); if (!b || !window.OSM_SESSION || !window.OSM_SESSION.platformAdmin) return;
+    if (b.dataset.trext) {
+      const d = Number(document.querySelector(`[data-trsel="${CSS.escape(b.dataset.trext)}"]`).value);
+      try { const r = await window.OSM_SESSION.call('/rest/v1/rpc/admin_adjust_trial', { method: 'POST', body: { p_id: b.dataset.trext, p_days: d } }); A.toast('Prueba ' + (d > 0 ? 'prorrogada' : 'recortada') + ' hasta el ' + fdate(r.ends_on) + '.', 'ok'); loadTrials(); }
+      catch (err) { A.toast(err.message, 'bad'); }
+    }
+    if (b.dataset.trend) {
+      if (b.dataset.confirm !== '1') { b.dataset.confirm = '1'; b.textContent = 'Confirmar'; return; }
+      try { await window.OSM_SESSION.call('/rest/v1/rpc/admin_end_trial', { method: 'POST', body: { p_id: b.dataset.trend } }); A.toast('Prueba terminada: los módulos quedan vencidos.', 'ok'); loadTrials(); }
+      catch (err) { A.toast(err.message, 'bad'); }
+    }
+  });
+
+  /* Alta de clientes: el administrador de la plataforma invita al primer propietario de
+     una organización de la que no es miembro. La base lo autoriza (inv_crear) y limita
+     el cupo a los usuarios de la licencia vigente (check_invitation). */
+  function clientAccessSection(orgs) {
+    const SS = window.OSM_SESSION; if (!SS || !SS.platformAdmin) return '';
+    const lic = orgs.filter((o) => o.id && /^[0-9a-f-]{36}$/.test(o.id) && (o.modules || []).length && !PL.expired(o));
+    return `<section class="card"><h2>Dar acceso a un cliente</h2>
+      <div class="note">Invite al responsable de la empresa cliente como propietario. Él podrá invitar a su equipo hasta el número de usuarios de la licencia. Primero cree la organización y guarde su licencia en la tabla de arriba.</div>
+      ${lic.length ? `<form id="caInvite" class="row" novalidate>
+        <label class="f" style="flex:2;min-width:200px"><span>Organización</span><select id="caOrg">${lic.map((o) => `<option value="${esc(o.id)}">${esc(o.name)}</option>`).join('')}</select></label>
+        <label class="f" style="flex:2;min-width:200px"><span>Correo</span><input id="caEmail" type="email" maxlength="160" required></label>
+        <label class="f" style="flex:2;min-width:200px"><span>Nombre completo</span><input id="caName" maxlength="120" required></label>
+        <label class="f" style="min-width:160px"><span>Rol</span><select id="caRole"><option value="owner">Propietario</option><option value="admin">Administrador</option></select></label>
+        <button class="b" type="submit">Invitar</button></form>` : '<div class="msg info">Aún no hay organizaciones con licencia vigente.</div>'}
+    </section>`;
+  }
+  document.addEventListener('submit', async (e) => {
+    if (e.target.id !== 'caInvite' || !window.OSM_SESSION || !window.OSM_SESSION.platformAdmin) return; e.preventDefault();
+    const sel = document.getElementById('caOrg'), oid = sel.value, oname = sel.selectedOptions[0].text;
+    const em = document.getElementById('caEmail').value.trim().toLowerCase(), nmv = document.getElementById('caName').value.trim(), rl = document.getElementById('caRole').value;
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) return A.toast('Escriba un correo válido.', 'warn');
+    if (nmv.length < 2) return A.toast('Escriba el nombre completo de la persona.', 'warn');
+    try {
+      await window.OSM_SESSION.call('/rest/v1/invitations', { method: 'POST', body: { org_id: oid, email: em, display_name: nmv, role: rl }, headers: { Prefer: 'return=minimal' } });
+      e.target.reset();
+      A.toast('Invitación creada para ' + em + ' en ' + oname + '. Vence en 7 días: pídale que entre al sitio, elija "Activar mi invitación" y use ese correo.', 'ok');
+    } catch (err) { A.toast(err.message, 'bad'); }
+  });
   document.addEventListener('submit', async (e) => {
     if (e.target.id !== 'tmInvite' || !window.OSM_SESSION) return; e.preventDefault();
     const em = document.getElementById('tmEmail').value.trim().toLowerCase(), nmv = document.getElementById('tmName').value.trim(), rl = document.getElementById('tmRole').value;
@@ -1235,6 +1592,371 @@ Cuadre de cierre       ΣΔSaldos = ΔInventario + PNI asumida por el transporta
 })();
 
 </script>
+<style>
+/* Módulo Balance de facilidad: ecuación del balance, celdas calculadas y acta imprimible */
+.fac-eq{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch}
+.fac-eq .kpi{flex:1 1 130px}
+.fac-eq .op{display:flex;align-items:center;justify-content:center;flex:0 0 18px;font:700 22px var(--f-display);color:var(--muted)}
+.fac-kpis{grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr))}
+.fac-eq .kpi.res{border-color:var(--accent);background:var(--surface)}
+.fac-eq .kpi.res .v{color:var(--accent);font-weight:600}
+td.calc{font-family:var(--f-mono);font-variant-numeric:tabular-nums;color:var(--muted);white-space:nowrap}
+td.calc.strong{color:var(--ink);font-weight:500}
+th.grp{text-align:center;border-bottom:2px solid var(--line);font:600 12px var(--f-display);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.fac-formula{font:500 13px var(--f-mono);background:var(--surface2);border:1px solid var(--line);border-radius:6px;padding:8px 10px;overflow-x:auto;white-space:nowrap}
+.acta{background:#fff;color:#111;border:1px solid var(--line);border-radius:6px;padding:28px;max-width:900px}
+.acta h2,.acta h3{color:#111}.acta table{width:100%;border-collapse:collapse;font-size:13px}.acta th,.acta td{border:1px solid #999;padding:5px 7px;color:#111;background:#fff}
+.acta .sig{display:grid;gap:28px;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin-top:48px}.acta .sig div{border-top:1px solid #111;padding-top:6px;font-size:13px}
+@media print{header.top,nav.tabs,.noprint,#toasts{display:none!important}body{background:#fff;padding:0}.acta{border:0;padding:0;max-width:none}main{padding:0}}
+</style>
+<script>
+/* =====================================================================
+ * Módulo "Balance de facilidad" (licencia "facility"). Interfaz sobre
+ * window.FacilityEngine. Se registra en window.OSM_EXT.
+ * Datos por organización en la colección 'fac':
+ *   '<org>__day__<AAAA-MM-DD>'  día de balance (borrador o cerrado, con revisión)
+ *   '<org>__cfg'                maestros: facilidad, tanques y parámetros
+ * ===================================================================== */
+(function () {
+  'use strict';
+  const FE = window.FacilityEngine, OE = window.OilEngine, PL = window.OSMPlatform;
+  window.OSM_EXT = window.OSM_EXT || [];
+  let A = null, day = null, res = null, sub = 'balance', dirty = false, confirmClose = false;
+  const $ = (s, r = document) => r.querySelector(s);
+  const esc = (s) => A.esc(s);
+  const f2 = (x) => A.fmt(x, 2), f5 = (x) => A.fmt(x, 5), f1 = (x) => A.fmt(x, 1), f3 = (x) => A.fmt(x, 3);
+  const org = () => PL.current(A.S);
+  const key = (date) => org().id + '__day__' + date;
+  const cfgKey = () => org().id + '__cfg';
+  const todayStr = () => new Date().toISOString().slice(0, 10);
+  const SUBS = [['dia', 'Día'], ['maestros', 'Maestros'], ['inventarios', 'Inventarios'], ['movimientos', 'Recibos y consumos'], ['despachos', 'Despachos'], ['balance', 'Balance'], ['acta', 'Acta'], ['mensual', 'Mensual'], ['metodo', 'Metodología']];
+  const LISTS = ['invIni', 'invFin', 'moves', 'tickets', 'rec', 'prod', 'cons', 'loss', 'tanks'];
+  const locked = () => day.status === 'cerrado';
+  const getP = (o, p) => p.split('.').reduce((c, k) => (c == null ? undefined : c[k]), o);
+  const setP = (o, p, v) => { const k = p.split('.'); let c = o; for (let i = 0; i < k.length - 1; i++) { if (c[k[i]] == null) c[k[i]] = {}; c = c[k[i]]; } c[k[k.length - 1]] = v; };
+
+  /* ------------------------- Estado ------------------------- */
+  function emptyData() {
+    const c = A.S.cache.fac && A.S.cache.fac[cfgKey()];
+    return { cfg: Object.assign(FE.defaults(), c ? c.cfg : {}), tanks: c ? JSON.parse(JSON.stringify(c.tanks || [])) : [], invIni: [], invFin: [], moves: [], tickets: [], rec: [], prod: [], cons: [], loss: [], notes: '', signers: [{ name: '', role: 'Ingeniero de producción' }, { name: '', role: 'Inspector de hidrocarburos' }, { name: '', role: 'Operador' }] };
+  }
+  const normalize = (d) => { LISTS.forEach((k) => (d[k] = d[k] || [])); d.cfg = Object.assign(FE.defaults(), d.cfg || {}); d.signers = d.signers || emptyData().signers; d.notes = d.notes || ''; return d; };
+  function savedDays() { const pref = org().id + '__day__'; return Object.entries(A.S.cache.fac || {}).filter(([k]) => k.startsWith(pref)).map(([, v]) => v).sort((a, b) => (a.date < b.date ? 1 : -1)); }
+  function ensureDay() {
+    if (day && day.org === org().id) return;
+    const l = savedDays();
+    if (l.length) return loadDay(l[0]);
+    day = { date: '2026-11-20', org: org().id, status: 'borrador', rev: 0, demo: true, data: normalize(Object.assign(FE.demo(), { notes: '', signers: emptyData().signers })) };
+    recompute();
+  }
+  function loadDay(p) { day = { date: p.date, org: p.org, status: p.status, rev: p.rev, data: normalize(JSON.parse(JSON.stringify(p.data))) }; dirty = false; recompute(); }
+  const tableOf = (ref) => { try { const t = A.tank(ref); return t && t.table && t.table.length ? t.table : null; } catch (e) { return null; } };
+  function recompute() { try { res = FE.compute(day.data, OE, tableOf); } catch (e) { res = { ok: false, err: [String(e.message || e)], warn: [], bal: {}, ini: { rows: [], tot: {} }, fin: { rows: [], tot: {} }, moves: [], tickets: [], by: {}, tanksOut: [], rec: [], prod: [], cons: [], loss: [], quality: {} }; } }
+  const touch = () => { dirty = true; };
+
+  /* ------------------------- Editor de tablas ------------------------- */
+  const tankOpts = () => day.data.tanks.filter((t) => t.id).map((t) => ({ v: t.id, l: t.name || t.id }));
+  const destOpts = () => Object.entries(FE.DESTS).map(([v, l]) => ({ v, l }));
+  // cols: {k, l, u, txt, sel(): [{v,l}], blank, w, calc(i): texto calculado, strong, grp}
+  function editor(listKey, cols, title, note, opts = {}) {
+    const rows = day.data[listKey], dis = locked() ? 'disabled' : '';
+    const groups = cols.some((c) => c.grp) ? cols.reduce((g, c) => { const n = c.grp || ''; if (g.length && g[g.length - 1].n === n) g[g.length - 1].span++; else g.push({ n, span: 1 }); return g; }, []) : null;
+    const cell = (c, r, i) => {
+      if (c.calc) return `<td class="calc${c.strong ? ' strong' : ''}" data-o="${listKey}:${i}:${c.k}">${esc(c.calc(i))}</td>`;
+      const v = getP(r, c.k) ?? '';
+      if (c.sel) return `<td class="t"><select data-l="${listKey}" data-i="${i}" data-c="${c.k}" ${dis} aria-label="${esc(c.l)} fila ${i + 1}">${c.blank !== undefined ? `<option value="">${esc(c.blank)}</option>` : ''}${c.sel().map((o) => `<option value="${esc(o.v)}" ${String(o.v) === String(v) ? 'selected' : ''}>${esc(o.l)}</option>`).join('')}</select></td>`;
+      return `<td class="${c.txt ? 't' : ''}"><input class="${c.txt ? 'txt' : ''}" ${c.txt ? '' : 'inputmode="decimal"'} data-l="${listKey}" data-i="${i}" data-c="${c.k}" value="${esc(v)}" ${dis} style="width:${c.w || (c.txt ? 150 : 86)}px" aria-label="${esc(c.l)} fila ${i + 1}"></td>`;
+    };
+    return `<section class="card"><div class="row"><h3 style="margin-right:auto">${esc(title)} <span class="note">(${rows.length})</span></h3>${locked() ? '' : `${opts.extra || ''}<button class="b s" data-add="${listKey}">Agregar fila</button>`}</div>
+      ${note ? `<div class="note">${note}</div>` : ''}
+      <div class="tw"><table><thead>${groups ? `<tr><th></th>${groups.map((g) => `<th class="grp" colspan="${g.span}">${esc(g.n)}</th>`).join('')}<th></th></tr>` : ''}<tr><th class="t">#</th>${cols.map((c) => `<th class="${c.txt || c.sel ? 't' : ''}">${esc(c.l)}${c.u ? ` <span class="note">${esc(c.u)}</span>` : ''}</th>`).join('')}<th></th></tr></thead><tbody>
+      ${rows.length ? rows.map((r, i) => `<tr><td class="t">${i + 1}</td>${cols.map((c) => cell(c, r, i)).join('')}<td>${locked() ? '' : `<button class="b s" data-rm="${listKey}:${i}" aria-label="Quitar fila ${i + 1}">✕</button>`}</td></tr>`).join('') : `<tr><td class="t note" colspan="${cols.length + 2}">Sin filas. Use «Agregar fila».</td></tr>`}
+      </tbody></table></div></section>`;
+  }
+  // Resultado calculado de una fila (por tanque o por posición) para pintar celdas sin redibujar la tabla.
+  function calcOf(listKey, i, k) {
+    const r = day.data[listKey][i]; if (!r || !res) return '';
+    const fmtK = (x, kk) => (x === undefined || x === null || x === '' ? '—' : ['ctsh', 'ctl', 'csw'].includes(kk) ? f5(x) : f2(x));
+    if (listKey === 'invIni' || listKey === 'invFin') { const m = (listKey === 'invIni' ? res.ini : res.fin).rows.find((x) => x.tank === r.tank); return m ? fmtK(m[k], k) : '—'; }
+    if (listKey === 'moves') {
+      const m = res.moves.find((x) => x.i === i); if (!m) return '—';
+      if (k === 'o_nsv') return f2(m.open.nsv); if (k === 'c_nsv') return f2(m.close.nsv); if (k === 'linked') return m.linked.n ? f2(m.linked.nsv) + ' (' + m.linked.n + ')' : '—';
+      if (k === 'main') return m.main ? f2(m.main.nsv) : '—'; return fmtK(m[k], k);
+    }
+    if (listKey === 'tickets') { const t = res.tickets.find((x) => x.i === i); if (!t) return '—'; return k === 'inMove' ? (t.inMove ? 'Dentro del movimiento' : 'Se suma') : f2(t[k]); }
+    return '';
+  }
+  function paint() {
+    document.querySelectorAll('[data-o]').forEach((el) => { const [l, i, k] = el.dataset.o.split(':'); el.textContent = l === 'sum' ? sumText(k) : calcOf(l, +i, k); });
+    const st = $('#facState'); if (st) st.innerHTML = stateChips();
+  }
+  const sumText = (k) => { const b = res && res.bal ? res.bal : {}; return b[k] === null || b[k] === undefined ? '—' : f2(b[k]); };
+  const stateChips = () => (locked() ? `<span class="chip ok">Cerrado · rev. ${day.rev}</span>` : `<span class="chip warn">Borrador${day.rev ? ' · rev. ' + day.rev : ''}</span>`) + (day.demo ? '<span class="chip">Datos de ejemplo</span>' : '') + (dirty ? '<span class="chip warn">Cambios sin guardar</span>' : '') + (res && !res.ok ? `<span class="chip bad">${res.err.length} error${res.err.length === 1 ? '' : 'es'}</span>` : '');
+
+  /* ------------------------- Vistas ------------------------- */
+  function view(api) {
+    A = api; ensureDay(); recompute();
+    const d = day.data, k = (lab, kk, cls = '') => `<div class="kpi ${cls}"><span class="k">${lab}</span><span class="v" data-o="sum:0:${kk}">${sumText(kk)}</span><span class="d">bbl NSV</span></div>`;
+    A.app.innerHTML = `<div id="toasts" class="msgs"></div>
+    <section class="card plhead noprint"><div class="row"><div style="margin-right:auto;min-width:0"><h2>Balance de facilidad · ${esc(d.cfg.facility || 'Sin nombre')} · ${esc(day.date)}</h2>
+      <div class="note">${esc(org().name)} · ${d.tanks.length} tanques · ${d.moves.length} despachos por tanque · ${d.tickets.length} tiquetes · ${d.rec.length} recibos</div></div>
+      <span id="facState" class="row" style="gap:6px">${stateChips()}</span></div>
+      <div class="kpis fac-kpis">${k('Inventario inicial', 'ini')}${k('Despachos', 'desp')}${k('Inventario final', 'fin')}${k('Autoconsumo', 'cons')}${k('Recibos de terceros', 'rec')}${k('Producción teórica', 'teo', 'ok')}</div>
+      <nav class="subtabs" role="tablist">${SUBS.map(([kk, l]) => `<button role="tab" aria-selected="${kk === sub}" data-fsub="${kk}">${l}</button>`).join('')}</nav></section>
+    <div id="facBody"></div>`;
+    ({ dia: vDia, maestros: vMaestros, inventarios: vInv, movimientos: vMov, despachos: vDesp, balance: vBal, acta: vActa, mensual: vMes, metodo: vMetodo })[sub]();
+  }
+  const body = (h) => { $('#facBody').innerHTML = h; };
+  const msgs = () => (res.err.length ? `<section class="card"><h3>Revise antes de cerrar</h3><div class="msgs">${res.err.map((e) => `<div class="msg bad">${esc(e)}</div>`).join('')}</div></section>` : '') + (res.warn.length ? `<section class="card"><div class="msgs">${res.warn.map((e) => `<div class="msg warn">${esc(e)}</div>`).join('')}</div></section>` : '');
+
+  function vDia() {
+    const l = savedDays();
+    body(`<section class="card"><h3>Día de operación</h3>
+      <div class="grid"><label class="f"><span>Fecha del balance</span><input type="date" id="facDate" value="${esc(day.date)}" ${locked() ? 'disabled' : ''}></label></div>
+      <div class="row">${locked() ? '<button class="b" id="facReopen">Reabrir como nueva revisión</button>' : '<button class="b p" id="facSave">Guardar día</button><button class="b" id="facClose">Cerrar día</button>'}
+        <button class="b" id="facNext">Día siguiente (trae inventario final)</button><button class="b" id="facDemo">Cargar ejemplo</button><button class="b" id="facExport">Exportar Excel</button></div>
+      <div id="facConfirm">${confirmClose ? `<div class="msg warn row" style="align-items:center">Al cerrar el día ya no se podrá editar; solo reabrir como nueva revisión. <button class="b p s" id="facCloseOk">Cerrar ${esc(day.date)}</button></div>` : ''}</div>
+      <div class="note">El día cerrado queda con su huella SHA-256 en la auditoría. «Día siguiente» copia los tanques y deja el inventario final de hoy como inventario inicial de mañana.</div></section>
+      <section class="card"><h3>Días guardados</h3>${l.length ? `<div class="tw"><table><thead><tr><th class="t">Fecha</th><th class="t">Estado</th><th>Rev.</th><th>Inv. inicial</th><th>Despachos</th><th>Inv. final</th><th>Producción teórica</th><th>Diferencia</th><th></th></tr></thead><tbody>
+      ${l.map((p) => `<tr><td class="t mono">${esc(p.date)}</td><td class="t">${p.status === 'cerrado' ? '<span class="chip ok">Cerrado</span>' : '<span class="chip warn">Borrador</span>'}</td><td>${p.rev}</td><td>${f2(p.summary.ini)}</td><td>${f2(p.summary.desp)}</td><td>${f2(p.summary.fin)}</td><td>${f2(p.summary.teo)}</td><td>${p.summary.diff === null || p.summary.diff === undefined ? '—' : f2(p.summary.diff)}</td><td><button class="b s" data-fopen="${esc(p.date)}">Abrir</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="note">Aún no hay días guardados.</div>'}</section>`);
+  }
+
+  function vMaestros() {
+    const c = day.data.cfg, dis = locked() ? 'disabled' : '';
+    const tabs = A.tanks().map((t) => ({ v: t.id, l: t.name }));
+    body(`<section class="card"><h3>Facilidad y parámetros</h3><div class="grid">
+      <label class="f"><span>Nombre de la facilidad</span><input class="txt" id="fcName" value="${esc(c.facility)}" ${dis} maxlength="120"></label>
+      <label class="f"><span>Tolerancia de la diferencia (%)</span><input id="fcTol" inputmode="decimal" value="${esc(c.tolPct)}" ${dis}></label>
+      <label class="f"><span>NSV del despacho por tanque</span><select id="fcMode" ${dis}><option value="nsv_diff" ${c.nsvMode === 'nsv_diff' ? 'selected' : ''}>NSV apertura − NSV cierre (planilla de balance)</option><option value="gsv_csw" ${c.nsvMode === 'gsv_csw' ? 'selected' : ''}>ΔGSV × CSW (API MPMS 12.1.1 §15.2.1)</option></select></label>
+      <label class="f"><span>%BSW del despacho</span><select id="fcBsw" ${dis}><option value="open" ${c.bswMode === 'open' ? 'selected' : ''}>El de la apertura</option><option value="close" ${c.bswMode === 'close' ? 'selected' : ''}>El del cierre</option><option value="avg" ${c.bswMode === 'avg' ? 'selected' : ''}>Promedio</option></select></label></div>
+      <div class="note">La tolerancia se aplica a la diferencia entre la producción medida y la teórica, como porcentaje de lo medido más los recibos.</div></section>
+    ${editor('tanks', [{ k: 'id', l: 'Código', txt: 1, w: 110 }, { k: 'name', l: 'Nombre', txt: 1, w: 190 }, { k: 'ref', l: 'Tabla de aforo', sel: () => tabs, blank: 'Sin tabla: ingreso el TOV' }, { k: 'alpha', l: 'α lámina', u: '1/°F', w: 90 }, { k: 'tBase', l: 'T base', u: '°F', w: 60 }],
+      'Tanques de la facilidad', 'Vincule cada tanque a su tabla de aforo (pestaña «Tanques y aforo») para calcular el TOV desde el nivel. Sin tabla, ingrese el TOV leído. α = 6,2·10⁻⁶ /°F para acero al carbono (API MPMS 12.1.1).')}`);
+  }
+
+  const MEAS = (p, grp) => [{ k: p + 'level', l: 'Nivel', u: 'mm', grp, w: 76 }, { k: p + 'tov', l: 'TOV', u: 'bbl', grp, w: 96 }, { k: p + 'fwv', l: 'Agua libre', u: 'bbl', grp, w: 76 }, { k: p + 'tl', l: 'T líquido', u: '°F', grp, w: 66 }, { k: p + 'ta', l: 'T amb.', u: '°F', grp, w: 60 }];
+  function invCols() {
+    return [{ k: 'tank', l: 'Tanque', sel: tankOpts, blank: '—', grp: 'Tanque' }, { k: 'state', l: 'Estado', sel: () => Object.entries(FE.STATES).map(([v, l]) => ({ v, l })), blank: '—', grp: 'Tanque' },
+      ...MEAS('', 'Medición'), { k: 'api', l: 'API', u: '@60 °F', grp: 'Calidad', w: 60 }, { k: 'bsw', l: 'BSW', u: '%', grp: 'Calidad', w: 60 },
+      { k: 'ctsh', l: 'CTSh', calc: 0, grp: 'Calculado' }, { k: 'gov', l: 'GOV', calc: 0, grp: 'Calculado' }, { k: 'ctl', l: 'CTL 6A', calc: 0, grp: 'Calculado' }, { k: 'gsv', l: 'GSV', calc: 0, grp: 'Calculado' }, { k: 'csw', l: 'CSW', calc: 0, grp: 'Calculado' }, { k: 'nsv', l: 'NSV', calc: 0, strong: 1, grp: 'Calculado' }];
+  }
+  const withCalc = (listKey, cols) => cols.map((c) => (c.calc === 0 ? Object.assign({}, c, { calc: (i) => calcOf(listKey, i, c.k) }) : c));
+  function vInv() {
+    const fill = !locked() && !day.data.invIni.length && day.data.tanks.length ? '<button class="b s" id="facFillInv">Una fila por tanque</button>' : '';
+    body(editor('invIni', withCalc('invIni', invCols()), 'Inventario inicial', 'Medición de cierre del día anterior. Con tabla de aforo basta el nivel; sin tabla, ingrese el TOV. Temperatura de lámina = (7·T líquido + T amb.)/8, redondeada (sin T amb.: la del líquido).', { extra: fill }) +
+      editor('invFin', withCalc('invFin', invCols()), 'Inventario final', 'Medición al corte del día.', { extra: !locked() && !day.data.invFin.length && day.data.tanks.length ? '<button class="b s" id="facFillFin">Una fila por tanque</button>' : '' }) +
+      `<section class="card"><div class="row"><h3 style="margin-right:auto">Totales</h3></div><div class="tw"><table><thead><tr><th class="t"></th><th>GOV</th><th>GSV</th><th>NSV</th><th>Agua libre</th><th>API pond.</th><th>BSW pond.</th></tr></thead><tbody>
+      ${[['Inicial', res.ini.tot], ['Final', res.fin.tot]].map(([n, t]) => `<tr><td class="t">${n}</td><td>${f2(t.gov)}</td><td>${f2(t.gsv)}</td><td><b>${f2(t.nsv)}</b></td><td>${f2(t.fwv)}</td><td>${f1(t.api)}</td><td>${f3(t.bsw)}</td></tr>`).join('')}</tbody></table></div></section>`);
+  }
+
+  function vMov() {
+    const vol = [{ k: 'gov', l: 'GOV', u: 'bbl' }, { k: 'gsv', l: 'GSV', u: 'bbl' }, { k: 'nsv', l: 'NSV', u: 'bbl' }, { k: 'api', l: 'API', u: '@60', w: 60 }, { k: 'bsw', l: 'BSW', u: '%', w: 60 }];
+    body(editor('rec', [{ k: 'type', l: 'Llega por', sel: () => Object.entries(FE.REC_TYPES).map(([v, l]) => ({ v, l })) }, { k: 'origin', l: 'Origen', txt: 1 }, { k: 'ref', l: 'Guía / boleta', txt: 1, w: 120 }, ...vol],
+      'Recibos de terceros', 'Crudo que entra a la facilidad sin ser producción propia: otros campos, compras o devoluciones. Se resta para obtener la producción teórica. Si deja el NSV vacío se calcula como GSV × CSW.') +
+      editor('prod', [{ k: 'source', l: 'Fuente', txt: 1, w: 220 }, { k: 'ref', l: 'Soporte', txt: 1, w: 120 }, ...vol],
+        'Producción medida (opcional)', 'Producción fiscalizada en pozos o medidores. Si la registra, el balance muestra la diferencia entre lo medido y lo teórico y la compara con la tolerancia.') +
+      editor('cons', [{ k: 'concept', l: 'Concepto', txt: 1, w: 220 }, { k: 'ref', l: 'Medidor / soporte', txt: 1, w: 140 }, { k: 'nsv', l: 'NSV', u: 'bbl' }],
+        'Autoconsumo', 'Crudo usado como combustible en la facilidad: hornos, calentadores, generación.') +
+      editor('loss', [{ k: 'concept', l: 'Evento', txt: 1, w: 220 }, { k: 'ref', l: 'Reporte', txt: 1, w: 140 }, { k: 'nsv', l: 'NSV', u: 'bbl' }],
+        'Pérdidas identificadas', 'Drenajes a sistemas de aguas, derrames reportados, quema u otras pérdidas con soporte.'));
+  }
+
+  function vDesp() {
+    const mvCols = withCalc('moves', [{ k: 'tank', l: 'Tanque', sel: tankOpts, blank: '—', grp: 'Movimiento' }, { k: 'dest', l: 'Destino', sel: destOpts, grp: 'Movimiento' }, { k: 'ref', l: 'Boleta / B/L', txt: 1, w: 130, grp: 'Movimiento' },
+      ...MEAS('open.', 'Apertura'), { k: 'open.api', l: 'API', u: '@60', grp: 'Apertura', w: 60 }, { k: 'open.bsw', l: 'BSW', u: '%', grp: 'Apertura', w: 60 },
+      ...MEAS('close.', 'Cierre'),
+      { k: 'o_nsv', l: 'NSV ap.', calc: 0, grp: 'Calculado' }, { k: 'c_nsv', l: 'NSV cierre', calc: 0, grp: 'Calculado' }, { k: 'gsv', l: 'GSV desp.', calc: 0, grp: 'Calculado' }, { k: 'nsv', l: 'NSV desp.', calc: 0, strong: 1, grp: 'Calculado' }, { k: 'linked', l: 'Tiquetes del tanque', calc: 0, grp: 'Calculado' }, { k: 'main', l: 'Al destino', calc: 0, strong: 1, grp: 'Calculado' }]);
+    const tkCols = withCalc('tickets', [{ k: 'dest', l: 'Destino', sel: destOpts }, { k: 'tank', l: 'Tanque', sel: tankOpts, blank: 'Sin tanque (medidor)' }, { k: 'ref', l: 'Tiquete / placa', txt: 1, w: 170 },
+      { k: 'gov', l: 'GOV', u: 'bbl' }, { k: 'gsv', l: 'GSV', u: 'bbl' }, { k: 'nsv', l: 'NSV', u: 'bbl' }, { k: 'api', l: 'API', u: '@60', w: 60 }, { k: 'bsw', l: 'BSW', u: '%', w: 60 }, { k: 'inMove', l: 'En el balance', calc: 0 }]);
+    const by = res.by || {};
+    body(editor('moves', mvCols, 'Despachos por medición estática', 'Apertura y cierre del tanque que despacha. La API y el %BSW del cierre son los de la apertura. Si durante el movimiento se cargaron carrotanques desde el mismo tanque, regístrelos abajo con ese tanque: se descuentan del destino principal (por ejemplo, oleoducto = movimiento − carrotanques).') +
+      editor('tickets', tkCols, 'Tiquetes: carrotanques, medidor de oleoducto y buques', 'Tiquetes de cargadero, boletas de medidor (LACT) o certificados de buque. Con un tanque que tuvo despacho estático, el tiquete ya está dentro del movimiento; sin tanque, o con un tanque sin despacho estático, se suma a los despachos.') +
+      `<section class="card"><h3>Despachos por destino</h3><div class="tw"><table><thead><tr><th class="t">Destino</th><th>GOV</th><th>GSV</th><th>NSV</th></tr></thead><tbody>
+      ${Object.entries(FE.DESTS).map(([k, l]) => `<tr><td class="t">${l}</td><td>${f2((by[k] || {}).gov)}</td><td>${f2((by[k] || {}).gsv)}</td><td><b>${f2((by[k] || {}).nsv)}</b></td></tr>`).join('')}
+      <tr><td class="t"><b>Total</b></td><td></td><td></td><td><b>${f2(res.bal.desp)}</b></td></tr></tbody></table></div></section>`);
+  }
+
+  function vBal() {
+    const b = res.bal, q = res.quality || {};
+    const kp = (lab, v, cls = '', d = 'bbl NSV') => `<div class="kpi ${cls}"><span class="k">${lab}</span><span class="v">${f2(v)}</span><span class="d">${d}</span></div>`;
+    const op = (s) => `<div class="op" aria-hidden="true">${s}</div>`;
+    const meas = b.prod !== null && b.prod !== undefined;
+    body(msgs() + `<section class="card"><div class="row"><h3 style="margin-right:auto">Producción teórica del día</h3><button class="b s noprint" id="facExport">Exportar Excel</button>${res.ok ? `<span class="chip ok">Cuadre de cierre: ${f2(b.check)}</span>` : '<span class="chip bad">Con errores</span>'}</div>
+      <div class="fac-eq">${kp('Inventario final', b.fin)}${op('−')}${kp('Inventario inicial', b.ini)}${op('+')}${kp('Despachos', b.desp)}${op('+')}${kp('Autoconsumo', b.cons)}${op('+')}${kp('Pérdidas identificadas', b.loss)}${op('−')}${kp('Recibos de terceros', b.rec)}${op('=')}<div class="kpi res"><span class="k">Producción teórica</span><span class="v">${f2(b.teo)}</span><span class="d">bbl NSV</span></div></div>
+      <div class="fac-formula">${f2(b.fin)} − ${f2(b.ini)} + ${f2(b.desp)} + ${f2(b.cons)} + ${f2(b.loss)} − ${f2(b.rec)} = ${f2(b.teo)} bbl</div></section>
+      ${meas ? `<section class="card"><div class="row"><h3 style="margin-right:auto">Medido frente a teórico</h3><span class="chip ${b.inTol ? 'ok' : 'bad'}">${b.inTol ? 'Dentro de la tolerancia' : 'Fuera de la tolerancia'} (±${A.fmt(b.tol, 2)} %)</span></div>
+        <div class="kpis">${kp('Producción medida', b.prod)}${kp('Producción teórica', b.teo)}${kp(b.diff >= 0 ? 'Pérdida no identificada' : 'Ganancia no identificada', Math.abs(b.diff), b.inTol ? 'ok' : 'bad')}<div class="kpi ${b.inTol ? 'ok' : 'bad'}"><span class="k">Diferencia</span><span class="v">${A.fmt(b.pct, 4)} %</span><span class="d">de lo medido + recibos</span></div></div></section>` : '<section class="card"><div class="note">Registre la producción medida en «Recibos y consumos» para comparar con la teórica y ver la pérdida o ganancia no identificada.</div></section>'}
+      <section class="card"><h3>Despachos por tanque y destino</h3><div class="tw"><table><thead><tr><th class="t">Tanque</th>${Object.values(FE.DESTS).map((l) => `<th>${l}</th>`).join('')}<th>Total del tanque</th></tr></thead><tbody>
+        ${res.tanksOut.length ? res.tanksOut.map((t) => `<tr><td class="t">${esc(t.name)}</td>${Object.keys(FE.DESTS).map((k) => `<td>${t[k] ? f2(t[k]) : '—'}</td>`).join('')}<td><b>${f2(t.nsv)}</b></td></tr>`).join('') : '<tr><td class="t note" colspan="5">Sin despachos asociados a tanques.</td></tr>'}
+        ${res.tickets.some((t) => !t.tank) ? `<tr><td class="t">Sin tanque (medidor)</td>${Object.keys(FE.DESTS).map((k) => { const s = res.tickets.filter((t) => !t.tank && t.dest === k).reduce((a, t) => a + Math.round(t.nsv * 100), 0) / 100; return `<td>${s ? f2(s) : '—'}</td>`; }).join('')}<td></td></tr>` : ''}
+        <tr><td class="t"><b>Total</b></td>${Object.keys(FE.DESTS).map((k) => `<td><b>${f2((res.by[k] || {}).nsv)}</b></td>`).join('')}<td><b>${f2(b.desp)}</b></td></tr></tbody></table></div></section>
+      <section class="card"><h3>Calidad</h3><div class="tw"><table><thead><tr><th class="t"></th><th>API @ 60 °F</th><th>%BSW</th></tr></thead><tbody>
+        ${[['Inventario inicial', q.ini], ['Inventario final', q.fin], ['Despachos', q.desp], ['Recibos de terceros', q.rec], ['Producción medida', q.prod]].map(([n, x]) => `<tr><td class="t">${n}</td><td>${f1((x || {}).api)}</td><td>${f3((x || {}).bsw)}</td></tr>`).join('')}</tbody></table></div>
+        <div class="note">Promedios ponderados por GSV.</div></section>`);
+  }
+
+  function vActa() {
+    const b = res.bal, d = day.data, dis = locked() ? 'disabled' : '';
+    const invRows = (d.tanks || []).map((t) => { const i = res.ini.rows.find((x) => x.tank === t.id), f = res.fin.rows.find((x) => x.tank === t.id); return i || f ? `<tr><td>${esc(t.name || t.id)}</td><td style="text-align:right">${i ? f2(i.nsv) : '—'}</td><td style="text-align:right">${f ? f2(f.nsv) : '—'}</td></tr>` : ''; }).join('');
+    body(`<section class="card noprint"><div class="row"><div style="margin-right:auto" class="note">Complete las observaciones y las firmas; luego imprima o guarde como PDF desde el navegador.</div><button class="b p" id="facPrint">Imprimir acta</button></div>
+      <label class="f"><span>Observaciones</span><textarea id="facNotes" rows="3" ${dis} style="width:100%">${esc(d.notes)}</textarea></label>
+      <div class="grid">${d.signers.map((s, i) => `<label class="f"><span>Firma ${i + 1}: nombre</span><input class="txt" data-sig="${i}" data-sk="name" value="${esc(s.name)}" ${dis}></label><label class="f"><span>Cargo</span><input class="txt" data-sig="${i}" data-sk="role" value="${esc(s.role)}" ${dis}></label>`).join('')}</div></section>
+      <div class="acta"><h2 style="margin:0">ACTA DE BALANCE DE CANTIDAD Y CALIDAD DE CRUDO</h2><p style="margin:4px 0 16px">${esc(d.cfg.facility || '')} · ${esc(org().name)} · Fecha: ${esc(day.date)}${day.rev ? ' · Revisión ' + day.rev : ''}${locked() ? '' : ' · BORRADOR'}</p>
+      <p>Con base en las mediciones de los tanques y en los tiquetes de despacho del día, los volúmenes netos a 60 °F son:</p>
+      <table><thead><tr><th>Inventario inicial</th><th>Despachos</th><th>Inventario final</th><th>Autoconsumo</th><th>Recibos de terceros</th><th>Pérdidas identificadas</th><th>Producción teórica</th></tr></thead>
+      <tbody><tr>${[b.ini, b.desp, b.fin, b.cons, b.rec, b.loss, b.teo].map((x) => `<td style="text-align:right">${f2(x)}</td>`).join('')}</tr></tbody></table>
+      ${b.prod !== null && b.prod !== undefined ? `<p>Producción medida: ${f2(b.prod)} bbl. Diferencia frente a la teórica: ${f2(b.diff)} bbl (${A.fmt(b.pct, 4)} %), ${b.inTol ? 'dentro' : 'fuera'} de la tolerancia de ±${A.fmt(b.tol, 2)} %.</p>` : ''}
+      <h3>Despachos por destino (bbl NSV)</h3><table><thead><tr>${Object.values(FE.DESTS).map((l) => `<th>${l}</th>`).join('')}<th>Total</th></tr></thead><tbody><tr>${Object.keys(FE.DESTS).map((k) => `<td style="text-align:right">${f2((res.by[k] || {}).nsv)}</td>`).join('')}<td style="text-align:right">${f2(b.desp)}</td></tr></tbody></table>
+      <h3>Inventario por tanque (bbl NSV)</h3><table><thead><tr><th>Tanque</th><th>Inicial</th><th>Final</th></tr></thead><tbody>${invRows}</tbody></table>
+      ${d.notes ? `<h3>Observaciones</h3><p style="white-space:pre-wrap">${esc(d.notes)}</p>` : ''}
+      <div class="sig">${d.signers.map((s) => `<div><b>${esc(s.name || ' ')}</b><br>${esc(s.role || '')}</div>`).join('')}</div></div>`);
+  }
+
+  function vMes() {
+    const month = (window.__facMonth || day.date.slice(0, 7));
+    const days = savedDays().filter((p) => p.date.startsWith(month));
+    const c = FE.consolidate(days);
+    body(`<section class="card"><div class="row"><h3 style="margin-right:auto">Balance consolidado del mes</h3><label class="f" style="min-width:180px"><span>Mes</span><input type="month" id="facMonth" value="${esc(month)}"></label>${days.length ? '<button class="b s" id="facExportMonth">Exportar Excel del mes</button>' : ''}</div>
+      ${c.gaps.length ? `<div class="msg warn">Continuidad: en ${c.gaps.length} día(s) el inventario inicial no coincide con el final del día anterior (${c.gaps.map((g) => g.date + ': ' + f2(g.gap)).join(' · ')}).</div>` : days.length > 1 ? '<div class="msg ok">Continuidad: cada inventario inicial coincide con el final del día anterior.</div>' : ''}
+      ${days.length ? `<div class="tw"><table><thead><tr><th class="t">Fecha</th><th class="t">Estado</th><th>Inv. inicial</th><th>Inv. final</th><th>Despachos</th><th>Autoconsumo</th><th>Recibos</th><th>Producción teórica</th><th>Medida</th><th>Diferencia</th><th>Salto de inventario</th></tr></thead><tbody>
+      ${c.rows.map((r) => `<tr><td class="t mono">${esc(r.date)}</td><td class="t">${r.status === 'cerrado' ? 'Cerrado' : 'Borrador'} · r${r.rev}</td><td>${f2(r.ini)}</td><td>${f2(r.fin)}</td><td>${f2(r.desp)}</td><td>${f2(r.cons)}</td><td>${f2(r.rec)}</td><td><b>${f2(r.teo)}</b></td><td>${r.prod === null || r.prod === undefined ? '—' : f2(r.prod)}</td><td>${r.diff === null || r.diff === undefined ? '—' : f2(r.diff)}</td><td class="${r.gap ? 'neg' : ''}">${r.gap ? f2(r.gap) : '—'}</td></tr>`).join('')}
+      <tr><td class="t"><b>Mes</b></td><td></td><td>${f2(c.tot.ini)}</td><td>${f2(c.tot.fin)}</td><td><b>${f2(c.tot.desp)}</b></td><td><b>${f2(c.tot.cons)}</b></td><td><b>${f2(c.tot.rec)}</b></td><td><b>${f2(c.tot.teo)}</b></td><td>${c.tot.prod === null ? '—' : f2(c.tot.prod)}</td><td>${c.tot.diff === null ? '—' : f2(c.tot.diff)}</td><td></td></tr></tbody></table></div>` : '<div class="note">No hay días guardados en este mes. Guarde el día en la pestaña «Día».</div>'}</section>`);
+  }
+
+  function vMetodo() {
+    body(`<section class="card guide"><h2>Metodología</h2>
+      <h3>Ecuación del balance</h3><p class="fac-formula">Producción teórica = Inventario final − Inventario inicial + Despachos + Autoconsumo + Pérdidas identificadas − Recibos de terceros</p>
+      <p>Todo en barriles netos a 60 °F (NSV). Si se registra la producción medida, la diferencia Medida − Teórica es la pérdida (+) o ganancia (−) no identificada, y se compara con la tolerancia como porcentaje de lo medido más los recibos. El cuadre de cierre verifica Inv. inicial + Producción teórica + Recibos − Despachos − Autoconsumo − Pérdidas − Inv. final = 0.</p>
+      <h3>Medición de tanques (API MPMS 3, 11.1 y 12.1.1)</h3><ul>
+      <li>TOV desde la tabla de aforo por interpolación lineal, o el TOV leído si el tanque no tiene tabla en el sistema.</li>
+      <li>Temperatura de lámina = ROUND((7·T líquido + T ambiente)/8, 0). CTSh = 1 + 2αΔT + α²ΔT², a 5 decimales, con ΔT = T lámina − T base.</li>
+      <li>GOV = (TOV − agua libre)·CTSh. CTL de la Tabla 6A (API MPMS 11.1-2004) a 5 decimales. GSV = GOV·CTL. CSW = (100 − %BSW)/100. NSV = GSV·CSW, a 2 decimales.</li></ul>
+      <h3>Despachos</h3><ul>
+      <li>Por tanque: NSV del despacho = NSV de apertura − NSV de cierre, con la API y el %BSW de la apertura (como la planilla de balance de planta). Opcional: ΔGSV × CSW según API MPMS 12.1.1 §15.2.1; las dos formas difieren a lo sumo en centésimas.</li>
+      <li>Los carrotanques cargados desde un tanque durante su despacho estático ya están en ese movimiento: el destino principal recibe el movimiento menos esos tiquetes. Los tiquetes sin tanque, o de un tanque sin despacho estático, se suman.</li>
+      <li>Buques: por el despacho estático del tanque de muelle o por el certificado del buque como tiquete.</li></ul>
+      <h3>Redondeo y sumas</h3><p>Redondeo decimal half-up en cada paso; las sumas se hacen en centésimas de barril para que los totales cuadren exactos.</p>
+      <h3>Validación</h3><p>El motor reproduce al centésimo una planilla diaria real de balance de planta (inventarios de 7 tanques, 3 despachos por tanque con cargadero y producción teórica). Valide los resultados con su procedimiento y con las ediciones vigentes de las normas antes de uso fiscal.</p></section>`);
+  }
+
+  /* ------------------------- Eventos ------------------------- */
+  const active = () => A && A.tab() === 'facilidad' && day;
+  document.addEventListener('input', (e) => {
+    const t = e.target; if (!active()) return;
+    if (t.dataset.l) { setP(day.data[t.dataset.l][+t.dataset.i], t.dataset.c, t.value); touch(); return; }
+    if (t.dataset.sig !== undefined) { day.data.signers[+t.dataset.sig][t.dataset.sk] = t.value; touch(); return; }
+    const m = { fcName: 'facility', fcTol: 'tolPct' }; if (m[t.id]) { day.data.cfg[m[t.id]] = t.value; touch(); }
+    if (t.id === 'facNotes') { day.data.notes = t.value; touch(); }
+  });
+  document.addEventListener('change', (e) => {
+    const t = e.target; if (!active()) return;
+    if (t.dataset.l) { setP(day.data[t.dataset.l][+t.dataset.i], t.dataset.c, t.value); touch(); recompute(); if (t.tagName === 'SELECT' && t.dataset.l === 'tanks') return view(A); paint(); return; }
+    if (t.id === 'fcMode') { day.data.cfg.nsvMode = t.value; touch(); recompute(); }
+    if (t.id === 'fcBsw') { day.data.cfg.bswMode = t.value; touch(); recompute(); }
+    if (['fcName', 'fcTol'].includes(t.id)) { recompute(); return view(A); }
+    if (t.id === 'facDate' && t.value) { day.date = t.value; touch(); return view(A); }
+    if (t.id === 'facMonth' && t.value) { window.__facMonth = t.value; return view(A); }
+    paint();
+  });
+  document.addEventListener('click', async (e) => {
+    const b = e.target.closest('button'); if (!b || !active()) return;
+    if (b.dataset.fsub) { sub = b.dataset.fsub; confirmClose = false; return view(A); }
+    if (b.dataset.add) {
+      const k = b.dataset.add, d = day.data, tk0 = (d.tanks[0] || {}).id || '';
+      const blank = { tanks: { id: 'TK-' + (d.tanks.length + 1), name: '', ref: '', alpha: '6.2e-6', tBase: '60' }, invIni: { tank: '', state: '' }, invFin: { tank: '', state: '' },
+        moves: { tank: tk0, dest: 'oleoducto', ref: '', open: {}, close: {} }, tickets: { dest: 'carrotanques', tank: '', ref: '' }, rec: { type: 'carrotanque', origin: '' }, prod: { source: '' }, cons: { concept: '' }, loss: { concept: '' } }[k];
+      d[k].push(JSON.parse(JSON.stringify(blank))); touch(); recompute(); return view(A);
+    }
+    if (b.dataset.rm) {
+      const [k, i] = b.dataset.rm.split(':'), row = day.data[k][+i];
+      if (k === 'tanks' && row && ['invIni', 'invFin', 'moves', 'tickets'].some((l) => day.data[l].some((x) => x.tank === row.id))) return A.toast('No se puede quitar ' + (row.name || row.id) + ': tiene mediciones o despachos en el día.', 'warn');
+      day.data[k].splice(+i, 1); touch(); recompute(); return view(A);
+    }
+    if (b.id === 'facFillInv' || b.id === 'facFillFin') { const l = b.id === 'facFillInv' ? 'invIni' : 'invFin'; day.data[l] = day.data.tanks.map((t) => ({ tank: t.id, state: '' })); touch(); return view(A); }
+    if (b.dataset.fopen) { const p = A.S.cache.fac[key(b.dataset.fopen)]; if (p) { loadDay(p); await A.audit('ABRIR_BALANCE_FACILIDAD', p.date, org().name + ' · rev ' + p.rev); sub = 'balance'; view(A); } return; }
+    if (b.id === 'facSave') return saveDay('borrador');
+    if (b.id === 'facClose') { confirmClose = true; return view(A); }
+    if (b.id === 'facCloseOk') { confirmClose = false; return saveDay('cerrado'); }
+    if (b.id === 'facReopen') { day.status = 'borrador'; touch(); await A.audit('REABRIR_BALANCE_FACILIDAD', day.date, org().name + ' · desde rev ' + day.rev); return view(A); }
+    if (b.id === 'facDemo') { day = { date: day.date, org: org().id, status: 'borrador', rev: day.rev, demo: true, data: normalize(Object.assign(FE.demo(), { notes: '', signers: day.data.signers })) }; dirty = true; recompute(); sub = 'balance'; return view(A); }
+    if (b.id === 'facNext') return nextDay();
+    if (b.id === 'facExport') return exportXlsx();
+    if (b.id === 'facExportMonth') return exportMonth();
+    if (b.id === 'facPrint') { try { window.print(); } catch (err) {} }
+  });
+
+  async function saveDay(status) {
+    if (!A.S.canWrite) return A.toast('Su rol no permite guardar.', 'warn');
+    recompute();
+    if (status === 'cerrado' && !res.ok) { sub = 'balance'; view(A); return A.toast('No se puede cerrar: corrija los errores del balance.', 'bad'); }
+    const prev = A.S.cache.fac[key(day.date)];
+    if (prev && prev.status === 'cerrado' && day.status === 'cerrado') return A.toast('El día ' + day.date + ' ya está cerrado. Reábralo como nueva revisión.', 'warn');
+    day.rev = (prev ? prev.rev : 0) + 1; day.status = status; day.demo = false;
+    const b = res.bal, data = JSON.parse(JSON.stringify(day.data));
+    const doc = { date: day.date, org: org().id, status, rev: day.rev, data, engine: FE.VERSION, user: A.S.me.name, uid: A.S.me.id, savedAt: new Date().toISOString(),
+      summary: { ini: b.ini, fin: b.fin, desp: b.desp, cons: b.cons, loss: b.loss, rec: b.rec, teo: b.teo, prod: b.prod, diff: b.diff, pct: b.pct, ok: res.ok, by: { carrotanques: (res.by.carrotanques || {}).nsv || 0, oleoducto: (res.by.oleoducto || {}).nsv || 0, buque: (res.by.buque || {}).nsv || 0 } },
+      hash: await A.sha256(JSON.stringify(data)) };
+    await A.put('fac', key(day.date), doc);
+    await A.put('fac', cfgKey(), { cfg: data.cfg, tanks: data.tanks, updatedAt: doc.savedAt });
+    await A.audit(status === 'cerrado' ? 'CERRAR_BALANCE_FACILIDAD' : 'GUARDAR_BALANCE_FACILIDAD', day.date, org().name + ' · rev ' + day.rev + ' · teórica ' + b.teo + ' · despachos ' + b.desp + ' · hash ' + doc.hash.slice(0, 16));
+    dirty = false; view(A); A.toast('Balance del ' + day.date + (status === 'cerrado' ? ' cerrado' : ' guardado') + ' (rev. ' + day.rev + ').', 'ok');
+  }
+  function nextDay() {
+    recompute();
+    const nx = new Date(Date.parse(day.date + 'T00:00:00Z') + 86400000).toISOString().slice(0, 10);
+    const nd = normalize(Object.assign(FE.nextDay(day.data), { notes: '', signers: day.data.signers }));
+    day = { date: nx, org: org().id, status: 'borrador', rev: 0, data: nd }; dirty = true; recompute(); sub = 'inventarios';
+    view(A); A.toast('Día ' + nx + ' creado: el inventario final del día anterior es el inventario inicial.', 'ok');
+  }
+
+  /* ------------------------- Excel ------------------------- */
+  const fileName = (t) => String(t).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w]+/g, '_').replace(/^_|_$/g, '');
+  function exportXlsx() {
+    recompute(); const X = window.XLSX; if (!X) return A.toast('No se pudo cargar la librería de Excel.', 'bad');
+    const wb = X.utils.book_new(), d = day.data, b = res.bal, n = (v) => { const x = FE.num(v); return isFinite(x) ? x : ''; };
+    const nameOf = (id) => ((d.tanks.find((t) => t.id === id) || {}).name || id || '');
+    const resumen = [['Balance de facilidad', d.cfg.facility || ''], ['Organización', org().name], ['Fecha', day.date], ['Estado', day.status + ' · rev ' + day.rev], ['Motor', 'FacilityEngine ' + FE.VERSION], [],
+      ['Concepto', 'bbl NSV'], ['Inventario inicial', b.ini], ['Inventario final', b.fin], ['Despachos', b.desp], ['Autoconsumo', b.cons], ['Pérdidas identificadas', b.loss], ['Recibos de terceros', b.rec],
+      ['Producción teórica', { f: 'ROUND(B9-B8+B10+B11+B12-B13,2)', v: b.teo }], ['Producción medida', b.prod === null ? '' : b.prod], ['Diferencia (medida − teórica)', b.prod === null ? '' : { f: 'ROUND(B15-B14,2)', v: b.diff }], [],
+      ['Despachos por destino', 'bbl NSV'], ...Object.entries(FE.DESTS).map(([k, l]) => [l, (res.by[k] || {}).nsv || 0])];
+    X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(resumen), 'Resumen');
+    const invH = ['Tanque', 'Estado', 'Nivel_mm', 'TOV', 'Agua_libre', 'T_liquido_F', 'T_amb_F', 'API60', 'BSW_pct', 'CTSh', 'GOV', 'CTL', 'GSV', 'CSW', 'NSV'];
+    const inv = (rows, calc) => [invH, ...rows.filter((r) => r.tank).map((r) => { const c = calc.find((x) => x.tank === r.tank) || {}; return [nameOf(r.tank), FE.STATES[r.state] || '', n(r.level), c.tov ?? n(r.tov), c.fwv ?? n(r.fwv), n(r.tl), n(r.ta), n(r.api), n(r.bsw), c.ctsh ?? '', c.gov ?? '', c.ctl ?? '', c.gsv ?? '', c.csw ?? '', c.nsv ?? '']; })];
+    X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(inv(d.invIni, res.ini.rows)), 'Inventario_inicial');
+    X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet(inv(d.invFin, res.fin.rows)), 'Inventario_final');
+    X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([['Tanque', 'Destino', 'Referencia', 'TOV_apertura', 'NSV_apertura', 'TOV_cierre', 'NSV_cierre', 'GOV', 'GSV', 'NSV', 'API60', 'BSW_pct', 'Tiquetes_del_tanque_NSV', 'Al_destino_NSV'],
+      ...res.moves.map((m) => [m.name, FE.DESTS[m.dest], m.ref, m.open.tov, m.open.nsv, m.close.tov, m.close.nsv, m.gov, m.gsv, m.nsv, m.api, m.bsw, m.linked.nsv, m.main.nsv])]), 'Despachos_tanque');
+    X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([['Destino', 'Tanque', 'Referencia', 'GOV', 'GSV', 'NSV', 'API60', 'BSW_pct', 'Dentro_de_movimiento'], ...res.tickets.map((t) => [FE.DESTS[t.dest], t.name, t.ref, t.gov ?? '', t.gsv ?? '', t.nsv, t.api ?? '', t.bsw ?? '', t.inMove ? 'SI' : 'NO'])]), 'Tiquetes');
+    const simple = (rows, h, f) => X.utils.aoa_to_sheet([h, ...rows.map(f)]);
+    X.utils.book_append_sheet(wb, simple(res.rec, ['Llega_por', 'Origen', 'Guia', 'GOV', 'GSV', 'NSV', 'API60', 'BSW_pct'], (r) => [FE.REC_TYPES[r.type] || '', r.origin || '', r.ref || '', r.gov ?? '', r.gsv ?? '', r.nsv, r.api ?? '', r.bsw ?? '']), 'Recibos');
+    X.utils.book_append_sheet(wb, simple(res.prod, ['Fuente', 'Soporte', 'NSV', 'API60', 'BSW_pct'], (r) => [r.source || '', r.ref || '', r.nsv, r.api ?? '', r.bsw ?? '']), 'Produccion_medida');
+    X.utils.book_append_sheet(wb, simple(res.cons, ['Concepto', 'Soporte', 'NSV'], (r) => [r.concept || '', r.ref || '', r.nsv]), 'Autoconsumo');
+    X.utils.book_append_sheet(wb, simple(res.loss, ['Evento', 'Reporte', 'NSV'], (r) => [r.concept || '', r.ref || '', r.nsv]), 'Perdidas');
+    const fn = 'Balance_' + fileName(d.cfg.facility || org().name) + '_' + day.date + '_r' + day.rev + '.xlsx';
+    A.audit('EXPORTAR_BALANCE_FACILIDAD', day.date, org().name + ' · ' + fn);
+    A.saveFile(fn, new Blob([X.write(wb, { type: 'array', bookType: 'xlsx' })], { type: 'application/octet-stream' }));
+  }
+
+  function exportMonth() {
+    const X = window.XLSX; if (!X) return A.toast('No se pudo cargar la librería de Excel.', 'bad');
+    const month = window.__facMonth || day.date.slice(0, 7), days = savedDays().filter((p) => p.date.startsWith(month)), c = FE.consolidate(days);
+    const h = ['Fecha', 'Estado', 'Rev', 'Inv_inicial', 'Inv_final', 'Despachos', 'Carrotanques', 'Oleoducto', 'Buque', 'Autoconsumo', 'Perdidas_identificadas', 'Recibos_terceros', 'Produccion_teorica', 'Produccion_medida', 'Diferencia', 'Salto_inventario'];
+    const B = 8; // filas 1-5 encabezado, 6 vacía, 7 títulos, datos desde la 8
+    const rows = c.rows.map((r, i) => { const x = i + B, s = (days.find((p) => p.date === r.date) || {}).summary || {}, by = s.by || {};
+      return [r.date, r.status, r.rev, r.ini, r.fin, r.desp, by.carrotanques || 0, by.oleoducto || 0, by.buque || 0, r.cons, r.loss || 0, r.rec,
+        { f: `ROUND(E${x}-D${x}+F${x}+J${x}+K${x}-L${x},2)`, v: r.teo }, r.prod ?? '', r.prod === null || r.prod === undefined ? '' : { f: `ROUND(N${x}-M${x},2)`, v: r.diff }, i ? { f: `ROUND(D${x}-E${x - 1},2)`, v: r.gap } : 0]; });
+    const n = rows.length + B - 1, sum = (col) => ({ f: `SUM(${col}${B}:${col}${n})` });
+    const tot = ['Mes', '', '', { f: `D${B}` }, { f: `E${n}` }, sum('F'), sum('G'), sum('H'), sum('I'), sum('J'), sum('K'), sum('L'), sum('M'), sum('N'), sum('O'), ''];
+    const wb = X.utils.book_new();
+    X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([['Balance consolidado', day.data.cfg.facility || ''], ['Organización', org().name], ['Mes', month], ['Días guardados', days.length], ['Días con salto de inventario', c.gaps.length], [], ...[h, ...rows, tot]]), 'Consolidado');
+    const fn = 'Balance_mensual_' + fileName(day.data.cfg.facility || org().name) + '_' + month + '.xlsx';
+    A.audit('EXPORTAR_BALANCE_MENSUAL', month, org().name + ' · ' + fn);
+    A.saveFile(fn, new Blob([X.write(wb, { type: 'array', bookType: 'xlsx' })], { type: 'application/octet-stream' }));
+  }
+
+  window.OSM_EXT.push({ key: 'facilidad', label: 'Balance facilidad', module: 'facility', render: view, after: 'historial' });
+})();
+</script>
 <script>
 /* =====================================================================
  * Acceso seguro y conexión a Supabase (sin librerías de terceros)
@@ -1251,6 +1973,9 @@ Cuadre de cierre       ΣΔSaldos = ΔInventario + PNI asumida por el transporta
   const SITE = location.origin + location.pathname;
   const IDLE_MS = 30 * 60 * 1000;
   const RK = 'osm.rt.v1', ORGK = 'osm.org.v1';
+  const TERMS_V = '2026-11-23';   // debe coincidir con private.terms_version() en la base
+  const consentBox = () => `<label class="ag-step" style="align-items:flex-start;gap:8px;font-size:13px"><input type="checkbox" id="agConsent" required style="width:auto;margin-top:3px">
+    <span>He leído y acepto los <a href="/terminos" target="_blank" rel="noopener">Términos y condiciones</a> y la <a href="/privacidad" target="_blank" rel="noopener">Política de tratamiento de datos personales</a>, y autorizo el tratamiento de mis datos para las finalidades allí descritas.</span></label>`;
   const ss = { get: (k) => { try { return sessionStorage.getItem(k); } catch (e) { return null; } }, set: (k, v) => { try { v === null ? sessionStorage.removeItem(k) : sessionStorage.setItem(k, v); } catch (e) {} } };
   const ls = { get: (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} } };
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1335,7 +2060,8 @@ Cuadre de cierre       ΣΔSaldos = ΔInventario + PNI asumida por el transporta
       ${field('agEmail', 'Correo', 'email', 'autocomplete="username" required maxlength="160"')}
       ${field('agPass', 'Contraseña', 'password', 'autocomplete="current-password" required maxlength="128"')}
       <button class="b p" id="agGo" type="submit">Ingresar</button></form>
-      <div class="ag-links"><button class="b s" data-ag="signup" type="button">Activar mi invitación</button><button class="b s" data-ag="forgot" type="button">Olvidé mi contraseña</button><button class="b s" data-ag="demo" type="button">Ver demostración sin cuenta</button></div>
+      <div class="ag-links"><button class="b s" data-ag="signup" type="button">Activar mi invitación</button><button class="b s" data-ag="forgot" type="button">Olvidé mi contraseña</button></div>
+      <p class="note">¿Su empresa aún no tiene acceso? <a href="/producto">Conozca el producto y solicite una prueba gratis</a>.</p>
       <p class="note">El acceso exige un código de una aplicación autenticadora (Google Authenticator, Microsoft Authenticator, Authy u otra). La sesión se cierra tras 30 minutos sin actividad o al cerrar la pestaña.</p>`);
     const m = ss.get('osm.msg'); if (m) { msg(m, 'info'); ss.set('osm.msg', null); }
   }
@@ -1345,6 +2071,7 @@ Cuadre de cierre       ΣΔSaldos = ΔInventario + PNI asumida por el transporta
       ${field('agEmail', 'Correo invitado', 'email', 'autocomplete="username" required maxlength="160"')}
       ${field('agPass', 'Nueva contraseña (mínimo 12 caracteres, con letras y números)', 'password', 'autocomplete="new-password" required minlength="12" maxlength="128"')}
       ${field('agPass2', 'Repita la contraseña', 'password', 'autocomplete="new-password" required minlength="12" maxlength="128"')}
+      ${consentBox()}
       <button class="b p" id="agGo" type="submit">Crear acceso</button></form><div class="ag-links"><button class="b s" data-ag="login" type="button">Volver</button></div>`);
   }
   function vForgot() {
@@ -1415,7 +2142,17 @@ Cuadre de cierre       ΣΔSaldos = ΔInventario + PNI asumida por el transporta
     if (verified.length) return vMfaVerify(verified[0], chooseOrg);
     return vMfaEnroll(chooseOrg);
   }
+  // Autorización de tratamiento de datos (Ley 1581 de 2012): se pide la versión vigente antes de entrar.
   async function chooseOrg() {
+    const cs = await call('/rest/v1/rpc/consent_status', { method: 'POST', body: {} }).catch(() => null);
+    if (cs && !cs.accepted) {
+      showGate(`<form id="agTerms" class="ag-form" novalidate><p>Antes de continuar, lea y acepte los documentos vigentes (versión ${esc(cs.current)}).</p>${consentBox()}
+        <button class="b p" id="agGo" type="submit">Aceptar y continuar</button></form><div class="ag-links"><button class="b s" data-ag="logout" type="button">Salir</button></div>`);
+      return;
+    }
+    return chooseOrgNext();
+  }
+  async function chooseOrgNext() {
     const rows = await call('/rest/v1/memberships?select=org_id,role,display_name,email,organizations(name)&user_id=eq.' + encodeURIComponent(sess.user.id));
     const admin = await call('/rest/v1/rpc/am_platform_admin', { method: 'POST', body: {} }).catch(() => false);
     if (!rows.length && !admin) {
@@ -1452,7 +2189,7 @@ Cuadre de cierre       ΣΔSaldos = ΔInventario + PNI asumida por el transporta
   }
 
   /* ---------------- Adaptador de datos (misma interfaz que usa la app) ---------------- */
-  const APP_COLS = ['tanks', 'tabs', 'products', 'vehicles', 'ops', 'pl'];
+  const APP_COLS = ['tanks', 'tabs', 'products', 'vehicles', 'ops', 'pl', 'fac'];
   function makeDb(orgId, admin) {
     const q = encodeURIComponent;
     async function pageAll(path) {
@@ -1502,7 +2239,7 @@ Cuadre de cierre       ΣΔSaldos = ΔInventario + PNI asumida por el transporta
               if (isNew) { const r = await call('/rest/v1/organizations?select=id', { method: 'POST', body, headers: { Prefer: 'return=representation' } }); oid = r[0].id; data.id = oid; }
               else await call('/rest/v1/organizations?id=eq.' + oid, { method: 'PATCH', body });
               const have = await call('/rest/v1/licenses?select=module&org_id=eq.' + oid);
-              for (const mod of ['static', 'pipeline']) {
+              for (const mod of ['static', 'pipeline', 'facility']) {
                 const on = (data.modules || []).includes(mod), exists = have.some((h) => h.module === mod);
                 if (on) await call('/rest/v1/licenses?on_conflict=org_id,module', { method: 'POST', body: { org_id: oid, module: mod, seats: Math.max(1, Number(data.seats) || 1), valid_to: data.validTo || null }, headers: { Prefer: 'resolution=merge-duplicates,return=minimal' } });
                 else if (exists) await call('/rest/v1/licenses?org_id=eq.' + oid + '&module=eq.' + mod, { method: 'DELETE' });
@@ -1533,8 +2270,13 @@ Cuadre de cierre       ΣΔSaldos = ΔInventario + PNI asumida por el transporta
       } else if (f.id === 'agSignup') {
         if (!strong(v('agPass'))) throw new Error('La contraseña debe tener al menos 12 caracteres, con letras y números.');
         if (v('agPass') !== v('agPass2')) throw new Error('Las contraseñas no coinciden.');
-        await call('/auth/v1/signup?redirect_to=' + encodeURIComponent(SITE), { method: 'POST', body: { email: v('agEmail').trim().toLowerCase(), password: v('agPass') }, auth: false });
+        if (!(document.getElementById('agConsent') || {}).checked) throw new Error('Para crear el acceso debe aceptar los Términos y la Política de tratamiento de datos personales.');
+        await call('/auth/v1/signup?redirect_to=' + encodeURIComponent(SITE), { method: 'POST', body: { email: v('agEmail').trim().toLowerCase(), password: v('agPass'), data: { consent_version: TERMS_V } }, auth: false });
         vLogin(); msg('Si el correo tiene invitación, recibirá un enlace de confirmación. Ábralo y luego ingrese aquí.', 'ok');
+      } else if (f.id === 'agTerms') {
+        if (!(document.getElementById('agConsent') || {}).checked) throw new Error('Marque la casilla para aceptar los documentos.');
+        await call('/rest/v1/rpc/accept_terms', { method: 'POST', body: { p_version: TERMS_V } });
+        await chooseOrgNext();
       } else if (f.id === 'agForgot') {
         await call('/auth/v1/recover?redirect_to=' + encodeURIComponent(SITE), { method: 'POST', body: { email: v('agEmail').trim().toLowerCase() }, auth: false }).catch(() => {});
         vLogin(); msg('Si el correo está registrado, recibirá un enlace para restablecer la contraseña.', 'ok');
@@ -1569,7 +2311,6 @@ Cuadre de cierre       ΣΔSaldos = ΔInventario + PNI asumida por el transporta
     const a = b.dataset.ag;
     if (a === 'signup') vSignup(); if (a === 'forgot') vForgot(); if (a === 'login') vLogin();
     if (a === 'logout') logout();
-    if (a === 'demo') { hideGate(); window.OSM_SESSION = null; resolveReady({ demo: true }); }
     if (b.dataset.org && pendingOrgs) { const p = pendingOrgs; pendingOrgs = null; finish(p.rows.find((r) => r.org_id === b.dataset.org), p.admin, p.rows); }
   });
 
@@ -1623,7 +2364,7 @@ const DEMO={id:'DEMO',name:'TK001',product:'Petróleo crudo',alpha:6.2e-6,tBase:
 const DEMO_VEH=[227.8,235.57,220.02,233.35,230.02,238.91,222.24,231.13,234.46,226.69,232.24].map((v,i)=>({key:'ABC'+(101+i),cab:'ABC'+(101+i),rem:'',maxGov:0,loads:[{ts:'2026-09-30',vol:v}],demo:true}));
 
 /* ---------- Almacenamiento: db compartida si existe, si no navegador ---------- */
-const COLS=['tanks','tabs','products','vehicles','ops','audit','platform','pl'];
+const COLS=['tanks','tabs','products','vehicles','ops','audit','platform','pl','fac'];
 const S={db:null,user:null,mode:'navegador',cache:{},me:{id:'local',name:'Invitado'},role:'Operador local',canWrite:true,seq:0};
 COLS.forEach(c=>S.cache[c]={});
 const LS='oilstatic.v1';
@@ -1694,7 +2435,7 @@ const TAB_MOD={despacho:'static',tanques:'static',productos:'static',vehiculos:'
 const PLT=window.OSMPlatform||{licensed:()=>true,current:()=>({name:''})};
 function allTabs(){const ext=window.OSM_EXT||[];const out=[];TABS.forEach(([k,l])=>{if(PLT.licensed(S,TAB_MOD[k]))out.push([k,l]);ext.filter(x=>x.after===k&&PLT.licensed(S,x.module)).forEach(x=>out.push([x.key,x.label]))});return out}
 const extOf=t=>(window.OSM_EXT||[]).find(x=>x.key===t);
-const OSM_API={S,put,del,audit,toast,esc,fmt,num,saveFile,sha256,go:t=>go(t),tab:()=>tab,org:()=>PLT.current(S),get app(){return $('#app')},refresh:()=>{drawWho();drawTabs()}};
+const OSM_API={S,put,del,audit,toast,esc,fmt,num,saveFile,sha256,tank:id=>getTank(id),tanks:()=>[DEMO,...Object.values(S.cache.tanks)].map(t=>({id:t.id,name:t.demo?t.name+' (demostración)':t.name})),go:t=>go(t),tab:()=>tab,org:()=>PLT.current(S),get app(){return $('#app')},refresh:()=>{drawWho();drawTabs()}};
 function go(t){const ok=allTabs().map(x=>x[0]);if(!ok.includes(t))t=ok[0]||'guia';tab=t;drawTabs();const x=extOf(t);if(x){x.render(OSM_API);window.scrollTo(0,0);return}({despacho:viewDespacho,tanques:viewTanques,productos:viewProductos,vehiculos:viewVehiculos,datos:viewDatos,historial:viewHistorial,audit:viewAudit,guia:viewGuia})[t]();window.scrollTo(0,0)}
 
 /* ---------- Pestaña Despacho ---------- */
@@ -1951,7 +2692,7 @@ document.addEventListener('click',async e=>{const t=e.target.closest('button');i
 /* ---------- Productos ---------- */
 function viewProductos(){const l=Object.entries(S.cache.products);
   $('#app').innerHTML=`<div id="toasts" class="msgs"></div><section class="card"><h2>Productos</h2><div class="note">El nombre, la gravedad API y el %BSW por defecto se ofrecen al elegir el producto en un despacho.</div>
-  <div class="tw"><table><thead><tr><th class="t">Producto</th><th>API @60 °F</th><th>%BSW</th><th></th></tr></thead><tbody>${l.length?l.map(([id,p])=>`<tr><td class="t">${esc(p.name)}</td><td class="mono">${p.api??''}</td><td class="mono">${p.bsw??''}</td><td><button class="b s" data-pdel="${id}">Eliminar</button></td></tr>`).join(''):'<tr><td class="t" colspan="4">Aún no hay productos. Agregue el primero abajo o desde el despacho.</td></tr>'}</tbody></table></div>
+  <div class="tw"><table><thead><tr><th class="t">Producto</th><th>API @60 °F</th><th>%BSW</th><th></th></tr></thead><tbody>${l.length?l.map(([id,p])=>`<tr><td class="t">${esc(p.name)}</td><td class="mono">${esc(p.api??'')}</td><td class="mono">${esc(p.bsw??'')}</td><td><button class="b s" data-pdel="${esc(id)}">Eliminar</button></td></tr>`).join(''):'<tr><td class="t" colspan="4">Aún no hay productos. Agregue el primero abajo o desde el despacho.</td></tr>'}</tbody></table></div>
   <div class="row"><label class="f">Nombre<input id="pn" placeholder="Petróleo crudo"></label><label class="f">API @60 °F<input id="pa" class="n"></label><label class="f">%BSW<input id="pb" class="n"></label><button class="b p" id="padd">Guardar producto</button></div></section>`}
 document.addEventListener('click',async e=>{const t=e.target.closest('button');if(!t||tab!=='productos')return;
   if(t.id==='padd'){const n=$('#pn').value.trim();if(!n)return toast('Escriba el nombre.','warn');await put('products',slug(n),{name:n,api:num($('#pa').value)||null,bsw:num($('#pb').value)||null});await audit('GUARDAR_PRODUCTO',n,'');viewProductos()}

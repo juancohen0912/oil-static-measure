@@ -13,6 +13,9 @@
   const SITE = location.origin + location.pathname;
   const IDLE_MS = 30 * 60 * 1000;
   const RK = 'osm.rt.v1', ORGK = 'osm.org.v1';
+  const TERMS_V = '2026-11-23';   // debe coincidir con private.terms_version() en la base
+  const consentBox = () => `<label class="ag-step" style="align-items:flex-start;gap:8px;font-size:13px"><input type="checkbox" id="agConsent" required style="width:auto;margin-top:3px">
+    <span>He leído y acepto los <a href="/terminos" target="_blank" rel="noopener">Términos y condiciones</a> y la <a href="/privacidad" target="_blank" rel="noopener">Política de tratamiento de datos personales</a>, y autorizo el tratamiento de mis datos para las finalidades allí descritas.</span></label>`;
   const ss = { get: (k) => { try { return sessionStorage.getItem(k); } catch (e) { return null; } }, set: (k, v) => { try { v === null ? sessionStorage.removeItem(k) : sessionStorage.setItem(k, v); } catch (e) {} } };
   const ls = { get: (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} } };
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -97,7 +100,8 @@
       ${field('agEmail', 'Correo', 'email', 'autocomplete="username" required maxlength="160"')}
       ${field('agPass', 'Contraseña', 'password', 'autocomplete="current-password" required maxlength="128"')}
       <button class="b p" id="agGo" type="submit">Ingresar</button></form>
-      <div class="ag-links"><button class="b s" data-ag="signup" type="button">Activar mi invitación</button><button class="b s" data-ag="forgot" type="button">Olvidé mi contraseña</button><button class="b s" data-ag="demo" type="button">Ver demostración sin cuenta</button></div>
+      <div class="ag-links"><button class="b s" data-ag="signup" type="button">Activar mi invitación</button><button class="b s" data-ag="forgot" type="button">Olvidé mi contraseña</button></div>
+      <p class="note">¿Su empresa aún no tiene acceso? <a href="/producto">Conozca el producto y solicite una prueba gratis</a>.</p>
       <p class="note">El acceso exige un código de una aplicación autenticadora (Google Authenticator, Microsoft Authenticator, Authy u otra). La sesión se cierra tras 30 minutos sin actividad o al cerrar la pestaña.</p>`);
     const m = ss.get('osm.msg'); if (m) { msg(m, 'info'); ss.set('osm.msg', null); }
   }
@@ -107,6 +111,7 @@
       ${field('agEmail', 'Correo invitado', 'email', 'autocomplete="username" required maxlength="160"')}
       ${field('agPass', 'Nueva contraseña (mínimo 12 caracteres, con letras y números)', 'password', 'autocomplete="new-password" required minlength="12" maxlength="128"')}
       ${field('agPass2', 'Repita la contraseña', 'password', 'autocomplete="new-password" required minlength="12" maxlength="128"')}
+      ${consentBox()}
       <button class="b p" id="agGo" type="submit">Crear acceso</button></form><div class="ag-links"><button class="b s" data-ag="login" type="button">Volver</button></div>`);
   }
   function vForgot() {
@@ -177,7 +182,17 @@
     if (verified.length) return vMfaVerify(verified[0], chooseOrg);
     return vMfaEnroll(chooseOrg);
   }
+  // Autorización de tratamiento de datos (Ley 1581 de 2012): se pide la versión vigente antes de entrar.
   async function chooseOrg() {
+    const cs = await call('/rest/v1/rpc/consent_status', { method: 'POST', body: {} }).catch(() => null);
+    if (cs && !cs.accepted) {
+      showGate(`<form id="agTerms" class="ag-form" novalidate><p>Antes de continuar, lea y acepte los documentos vigentes (versión ${esc(cs.current)}).</p>${consentBox()}
+        <button class="b p" id="agGo" type="submit">Aceptar y continuar</button></form><div class="ag-links"><button class="b s" data-ag="logout" type="button">Salir</button></div>`);
+      return;
+    }
+    return chooseOrgNext();
+  }
+  async function chooseOrgNext() {
     const rows = await call('/rest/v1/memberships?select=org_id,role,display_name,email,organizations(name)&user_id=eq.' + encodeURIComponent(sess.user.id));
     const admin = await call('/rest/v1/rpc/am_platform_admin', { method: 'POST', body: {} }).catch(() => false);
     if (!rows.length && !admin) {
@@ -214,7 +229,7 @@
   }
 
   /* ---------------- Adaptador de datos (misma interfaz que usa la app) ---------------- */
-  const APP_COLS = ['tanks', 'tabs', 'products', 'vehicles', 'ops', 'pl'];
+  const APP_COLS = ['tanks', 'tabs', 'products', 'vehicles', 'ops', 'pl', 'fac'];
   function makeDb(orgId, admin) {
     const q = encodeURIComponent;
     async function pageAll(path) {
@@ -264,7 +279,7 @@
               if (isNew) { const r = await call('/rest/v1/organizations?select=id', { method: 'POST', body, headers: { Prefer: 'return=representation' } }); oid = r[0].id; data.id = oid; }
               else await call('/rest/v1/organizations?id=eq.' + oid, { method: 'PATCH', body });
               const have = await call('/rest/v1/licenses?select=module&org_id=eq.' + oid);
-              for (const mod of ['static', 'pipeline']) {
+              for (const mod of ['static', 'pipeline', 'facility']) {
                 const on = (data.modules || []).includes(mod), exists = have.some((h) => h.module === mod);
                 if (on) await call('/rest/v1/licenses?on_conflict=org_id,module', { method: 'POST', body: { org_id: oid, module: mod, seats: Math.max(1, Number(data.seats) || 1), valid_to: data.validTo || null }, headers: { Prefer: 'resolution=merge-duplicates,return=minimal' } });
                 else if (exists) await call('/rest/v1/licenses?org_id=eq.' + oid + '&module=eq.' + mod, { method: 'DELETE' });
@@ -295,8 +310,13 @@
       } else if (f.id === 'agSignup') {
         if (!strong(v('agPass'))) throw new Error('La contraseña debe tener al menos 12 caracteres, con letras y números.');
         if (v('agPass') !== v('agPass2')) throw new Error('Las contraseñas no coinciden.');
-        await call('/auth/v1/signup?redirect_to=' + encodeURIComponent(SITE), { method: 'POST', body: { email: v('agEmail').trim().toLowerCase(), password: v('agPass') }, auth: false });
+        if (!(document.getElementById('agConsent') || {}).checked) throw new Error('Para crear el acceso debe aceptar los Términos y la Política de tratamiento de datos personales.');
+        await call('/auth/v1/signup?redirect_to=' + encodeURIComponent(SITE), { method: 'POST', body: { email: v('agEmail').trim().toLowerCase(), password: v('agPass'), data: { consent_version: TERMS_V } }, auth: false });
         vLogin(); msg('Si el correo tiene invitación, recibirá un enlace de confirmación. Ábralo y luego ingrese aquí.', 'ok');
+      } else if (f.id === 'agTerms') {
+        if (!(document.getElementById('agConsent') || {}).checked) throw new Error('Marque la casilla para aceptar los documentos.');
+        await call('/rest/v1/rpc/accept_terms', { method: 'POST', body: { p_version: TERMS_V } });
+        await chooseOrgNext();
       } else if (f.id === 'agForgot') {
         await call('/auth/v1/recover?redirect_to=' + encodeURIComponent(SITE), { method: 'POST', body: { email: v('agEmail').trim().toLowerCase() }, auth: false }).catch(() => {});
         vLogin(); msg('Si el correo está registrado, recibirá un enlace para restablecer la contraseña.', 'ok');
@@ -331,7 +351,6 @@
     const a = b.dataset.ag;
     if (a === 'signup') vSignup(); if (a === 'forgot') vForgot(); if (a === 'login') vLogin();
     if (a === 'logout') logout();
-    if (a === 'demo') { hideGate(); window.OSM_SESSION = null; resolveReady({ demo: true }); }
     if (b.dataset.org && pendingOrgs) { const p = pendingOrgs; pendingOrgs = null; finish(p.rows.find((r) => r.org_id === b.dataset.org), p.admin, p.rows); }
   });
 

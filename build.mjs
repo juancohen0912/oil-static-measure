@@ -46,7 +46,7 @@ const hashes = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
   .map((m) => `'sha256-${createHash('sha256').update(m[1], 'utf8').digest('base64')}'`);
 const CSP = [
   "default-src 'none'",
-  `script-src ${hashes.join(' ')} https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js`,
+  `script-src ${hashes.join(' ')} 'self'`,   // 'self': solo vendor/xlsx (SheetJS 0.20.3) servido desde este sitio
   "style-src 'unsafe-inline' https://fonts.googleapis.com",
   'font-src https://fonts.gstatic.com',
   "img-src 'self' data: blob:",
@@ -65,3 +65,37 @@ rmSync('dist', { recursive: true, force: true });
 mkdirSync('dist');
 writeFileSync('dist/index.html', html);
 console.log(`dist/index.html listo (${(html.length / 1024).toFixed(0)} KB)`);
+
+// Páginas estáticas sin scripts: producto y documentos legales (plantilla común en legal/).
+async function staticPage(src, out) {
+  let page = src.replace(/<!--[\s\S]*?-->\s*/g, '');
+  if (/<script/i.test(page)) throw new Error(out + ' no debe tener scripts');
+  page = await replaceAsync(page, /<style>([\s\S]*?)<\/style>/g, async (_all, css) => {
+    const o = await transform(css, { loader: 'css', minify: true, legalComments: 'none' });
+    return `<style>${o.code.trim()}</style>`;
+  });
+  const PAGE_CSP = ["default-src 'none'", "script-src 'none'", "style-src 'unsafe-inline' https://fonts.googleapis.com",
+    'font-src https://fonts.gstatic.com', 'img-src data:', "base-uri 'none'", "form-action 'none'", "object-src 'none'"].join('; ');
+  if (!/<meta charset="utf-8">/.test(page)) throw new Error(out + ' sin <meta charset>');
+  page = page.replace('<meta charset="utf-8">', `<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${PAGE_CSP}">`)
+    .replace(/^<!doctype html>/i, `<!doctype html>\n${HTML_NOTICE}`);
+  writeFileSync('dist/' + out, page);
+  console.log(`dist/${out} listo (${(page.length / 1024).toFixed(0)} KB)`);
+}
+await staticPage(readFileSync('producto.html', 'utf8'), 'producto.html');
+// SheetJS 0.20.3 servido desde el propio sitio (corrige CVE-2023-30533 y CVE-2024-22363 de la 0.18.5).
+mkdirSync('dist/vendor', { recursive: true });
+writeFileSync('dist/vendor/xlsx-0.20.3.full.min.js', readFileSync('vendor/xlsx-0.20.3.full.min.js'));
+// Política de divulgación de vulnerabilidades (RFC 9116).
+mkdirSync('dist/.well-known', { recursive: true });
+writeFileSync('dist/.well-known/security.txt', readFileSync('security.txt', 'utf8'));
+const shell = readFileSync('legal/_plantilla.html', 'utf8');
+const escAttr = (t) => String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+for (const name of ['terminos', 'privacidad', 'cookies', 'pqrs']) {
+  const src = readFileSync(`legal/${name}.html`, 'utf8');
+  const meta = JSON.parse(src.match(/<!--\s*(\{[\s\S]*?\})\s*-->/)[1]);
+  const body = src.replace(/<!--[\s\S]*?-->\s*/, '');
+  const html = shell.replace(/\{\{title\}\}/g, escAttr(meta.title)).replace(/\{\{description\}\}/g, escAttr(meta.description))
+    .replace('{{content}}', () => body).replace(`<a href="/${name}">`, `<a href="/${name}" aria-current="page">`);
+  await staticPage(html, name + '.html');
+}
