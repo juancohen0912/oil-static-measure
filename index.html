@@ -98,6 +98,7 @@ footer.legal a{color:var(--accent)}
   <p><b>© 2026 Juan Cohen.</b> Todos los derechos reservados. Oil Static Measure y su código son propiedad del autor; se prohíbe su copia, modificación o distribución sin autorización escrita.</p>
   <p><b>Exención de responsabilidad:</b> herramienta de apoyo con fines informativos. Sus resultados no sustituyen la liquidación oficial, el procedimiento de medición vigente de cada operador ni la validación de un profesional competente. El autor no asume responsabilidad por decisiones comerciales, contractuales o fiscales tomadas con base en estos cálculos. Verifique siempre contra las ediciones vigentes de las normas API MPMS y ASTM.</p>
   <p>Contacto y servicios de automatización: <a href="https://www.linkedin.com/in/juan-cohen-91b175b0" target="_blank" rel="noopener">Juan Cohen en LinkedIn</a></p>
+  <p><a href="/terminos">Términos y condiciones</a> · <a href="/privacidad">Política de tratamiento de datos personales</a> · <a href="/cookies">Política de cookies</a> · <a href="/pqrs">PQRS y habeas data</a></p>
 </footer>
 <noscript><p style="padding:16px">Oil Static Measure requiere JavaScript.</p></noscript>
 </div>
@@ -1093,8 +1094,9 @@ a.ag-open:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
         ${adm ? `<td><button class="b s" data-osave="${esc(o.id)}">Guardar</button></td>` : ''}</tr>`).join('')}
       </tbody></table></div>
       <div class="note">${window.OSM_SESSION ? 'Las licencias se aplican en el servidor: sin licencia vigente, la base de datos rechaza la lectura y escritura del módulo. Solo el administrador de la plataforma las modifica, y no puede ver los datos de las organizaciones de las que no es miembro.' : 'Modo demostración: organizaciones y licencias se guardan solo en este navegador.'}</div>
-    </section>${clientAccessSection(orgs)}${teamSection()}`;
+    </section>${trialsSection()}${clientAccessSection(orgs)}${teamSection()}`;
     if (window.OSM_SESSION) loadTeam();
+    if (window.OSM_SESSION && window.OSM_SESSION.platformAdmin) loadTrials();
   }
   const ROLES = [['viewer', 'Visor'], ['analyst', 'Analista'], ['admin', 'Administrador'], ['owner', 'Propietario']];
   const RANK = { viewer: 1, analyst: 2, admin: 3, owner: 4 };
@@ -1123,6 +1125,72 @@ a.ag-open:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
         ${inv.map((i) => `<tr><td class="t mono">${esc(i.email)}</td><td class="t">${esc(i.display_name)}</td><td class="t">${esc(rl(i.role))}</td><td class="t mono">${esc(String(i.expires_at).slice(0, 10))}</td><td><button class="b s" type="button" data-tmrev="${esc(i.id)}">Revocar</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="note">No hay invitaciones pendientes.</div>'}`;
     } catch (err) { el.innerHTML = `<div class="msg bad">${esc(err.message)}</div>`; }
   }
+  /* Pruebas gratis (7, 15 o 30 días calendario): las asigna el administrador de la plataforma.
+     La base crea la organización, las licencias con vencimiento y la invitación en una sola
+     transacción (public.admin_grant_trial) y exige segundo factor y rol de administrador. */
+  const MOD_LABEL = { static: 'Estática', pipeline: 'Oleoducto', facility: 'Facilidad' };
+  const fdate = (d) => { if (!d) return '—'; const [y, m, dd] = String(d).slice(0, 10).split('-'); return dd + '/' + m + '/' + y; };
+  function trialsSection() {
+    const SS = window.OSM_SESSION; if (!SS || !SS.platformAdmin) return '';
+    return `<section class="card"><h2>Pruebas gratis</h2>
+      <div class="note">Dé acceso de prueba a un correo. Se crea la organización con los módulos elegidos, que vencen al terminar el último día de la prueba (hora de Colombia), y la persona queda invitada como propietaria. Si ya tiene cuenta, entra directo.</div>
+      <form id="trForm" class="grid" novalidate>
+        <label class="f"><span>Correo</span><input id="trEmail" type="email" maxlength="160" required></label>
+        <label class="f"><span>Nombre completo</span><input id="trName" maxlength="120" required></label>
+        <label class="f"><span>Empresa</span><input id="trOrg" maxlength="120" required></label>
+        <label class="f"><span>Tipo</span><select id="trType">${['Operadora', 'Inspección', 'Oleoducto', 'Otro'].map((t) => `<option>${t}</option>`).join('')}</select></label>
+        <label class="f"><span>Duración</span><select id="trDays"><option value="7">7 días</option><option value="15" selected>15 días</option><option value="30">30 días</option></select></label>
+        <label class="f"><span>Usuarios</span><input id="trSeats" inputmode="numeric" value="3"></label>
+        <fieldset class="f" style="border:0;padding:0;margin:0"><span>Módulos</span><div class="row" style="gap:12px">${Object.entries(MOD_LABEL).map(([k, l]) => `<label style="display:inline-flex;gap:6px;align-items:center"><input type="checkbox" data-trmod="${k}" checked style="width:auto">${l}</label>`).join('')}</div></fieldset>
+        <label class="f"><span>Nota interna (opcional)</span><input id="trNote" maxlength="300"></label>
+        <div class="row"><button class="b p" type="submit">Dar prueba gratis</button></div>
+      </form>
+      <div id="trList"><div class="note">Cargando pruebas…</div></div></section>`;
+  }
+  async function loadTrials() {
+    const el = document.getElementById('trList'); if (!el) return;
+    try {
+      const l = await window.OSM_SESSION.call('/rest/v1/rpc/admin_list_trials', { method: 'POST', body: {} }) || [];
+      el.innerHTML = l.length ? `<div class="tw"><table><thead><tr><th class="t">Correo</th><th class="t">Empresa</th><th class="t">Módulos</th><th>Usuarios</th><th class="t">Desde</th><th class="t">Hasta (incl.)</th><th class="t">Estado</th><th class="t">Acciones</th></tr></thead><tbody>
+        ${l.map((t) => `<tr><td class="t mono">${A.esc(t.email)}</td><td class="t">${A.esc(t.org || '—')}</td><td class="t">${A.esc((t.modules || []).map((m) => MOD_LABEL[m] || m).join(', '))}</td><td>${A.esc(t.seats)}</td>
+          <td class="t mono">${fdate(t.starts_on)}</td><td class="t mono">${fdate(t.ends_on)}</td>
+          <td class="t">${t.active ? `<span class="chip ok">Vigente · ${A.esc(t.days_left)} día${t.days_left === 1 ? '' : 's'}</span>` : '<span class="chip bad">Vencida</span>'}${t.joined ? '' : ' <span class="chip warn">Sin activar</span>'}</td>
+          <td class="t"><div class="row" style="gap:6px;flex-wrap:nowrap"><select data-trsel="${A.esc(t.id)}" aria-label="Días a prorrogar"><option value="7">+7</option><option value="15">+15</option><option value="30">+30</option><option value="-7">−7</option></select><button class="b s" data-trext="${A.esc(t.id)}">Aplicar</button>${t.active ? `<button class="b s" data-trend="${A.esc(t.id)}">Terminar</button>` : ''}</div></td></tr>`).join('')}
+        </tbody></table></div>` : '<div class="note">Aún no ha dado pruebas gratis.</div>';
+    } catch (err) { el.innerHTML = `<div class="msg bad">${A.esc(err.message)}</div>`; }
+  }
+  document.addEventListener('submit', async (e) => {
+    if (e.target.id !== 'trForm' || !window.OSM_SESSION || !window.OSM_SESSION.platformAdmin) return; e.preventDefault();
+    const v = (id) => document.getElementById(id).value.trim();
+    const mods = [...document.querySelectorAll('[data-trmod]')].filter((i) => i.checked).map((i) => i.dataset.trmod);
+    const em = v('trEmail').toLowerCase(), seats = Number(v('trSeats'));
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) return A.toast('Escriba un correo válido.', 'warn');
+    if (v('trName').length < 2 || v('trOrg').length < 2) return A.toast('Escriba el nombre de la persona y de la empresa.', 'warn');
+    if (!mods.length) return A.toast('Elija al menos un módulo.', 'warn');
+    if (!(seats >= 1 && seats <= 10 && Number.isInteger(seats))) return A.toast('Los usuarios van de 1 a 10.', 'warn');
+    const btn = e.target.querySelector('button[type=submit]'); btn.disabled = true;
+    try {
+      const r = await window.OSM_SESSION.call('/rest/v1/rpc/admin_grant_trial', { method: 'POST', body: { p_email: em, p_name: v('trName'), p_org_name: v('trOrg'), p_days: Number(v('trDays')), p_modules: mods, p_seats: seats, p_org_type: v('trType'), p_note: v('trNote') || null } });
+      e.target.reset();
+      A.toast(r.existing_account ? `Prueba asignada hasta el ${fdate(r.ends_on)}: ${em} ya tenía cuenta y verá la organización al ingresar.` : `Prueba asignada hasta el ${fdate(r.ends_on)}. Pídale a ${em} que entre al sitio, elija «Activar mi invitación» y use ese correo.`, 'ok');
+      loadTrials();
+    } catch (err) { A.toast(err.message, 'bad'); }
+    finally { btn.disabled = false; }
+  });
+  document.addEventListener('click', async (e) => {
+    const b = e.target.closest('button'); if (!b || !window.OSM_SESSION || !window.OSM_SESSION.platformAdmin) return;
+    if (b.dataset.trext) {
+      const d = Number(document.querySelector(`[data-trsel="${CSS.escape(b.dataset.trext)}"]`).value);
+      try { const r = await window.OSM_SESSION.call('/rest/v1/rpc/admin_adjust_trial', { method: 'POST', body: { p_id: b.dataset.trext, p_days: d } }); A.toast('Prueba ' + (d > 0 ? 'prorrogada' : 'recortada') + ' hasta el ' + fdate(r.ends_on) + '.', 'ok'); loadTrials(); }
+      catch (err) { A.toast(err.message, 'bad'); }
+    }
+    if (b.dataset.trend) {
+      if (b.dataset.confirm !== '1') { b.dataset.confirm = '1'; b.textContent = 'Confirmar'; return; }
+      try { await window.OSM_SESSION.call('/rest/v1/rpc/admin_end_trial', { method: 'POST', body: { p_id: b.dataset.trend } }); A.toast('Prueba terminada: los módulos quedan vencidos.', 'ok'); loadTrials(); }
+      catch (err) { A.toast(err.message, 'bad'); }
+    }
+  });
+
   /* Alta de clientes: el administrador de la plataforma invita al primer propietario de
      una organización de la que no es miembro. La base lo autoriza (inv_crear) y limita
      el cupo a los usuarios de la licencia vigente (check_invitation). */
@@ -1905,6 +1973,9 @@ th.grp{text-align:center;border-bottom:2px solid var(--line);font:600 12px var(-
   const SITE = location.origin + location.pathname;
   const IDLE_MS = 30 * 60 * 1000;
   const RK = 'osm.rt.v1', ORGK = 'osm.org.v1';
+  const TERMS_V = '2026-11-23';   // debe coincidir con private.terms_version() en la base
+  const consentBox = () => `<label class="ag-step" style="align-items:flex-start;gap:8px;font-size:13px"><input type="checkbox" id="agConsent" required style="width:auto;margin-top:3px">
+    <span>He leído y acepto los <a href="/terminos" target="_blank" rel="noopener">Términos y condiciones</a> y la <a href="/privacidad" target="_blank" rel="noopener">Política de tratamiento de datos personales</a>, y autorizo el tratamiento de mis datos para las finalidades allí descritas.</span></label>`;
   const ss = { get: (k) => { try { return sessionStorage.getItem(k); } catch (e) { return null; } }, set: (k, v) => { try { v === null ? sessionStorage.removeItem(k) : sessionStorage.setItem(k, v); } catch (e) {} } };
   const ls = { get: (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} } };
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1989,8 +2060,8 @@ th.grp{text-align:center;border-bottom:2px solid var(--line);font:600 12px var(-
       ${field('agEmail', 'Correo', 'email', 'autocomplete="username" required maxlength="160"')}
       ${field('agPass', 'Contraseña', 'password', 'autocomplete="current-password" required maxlength="128"')}
       <button class="b p" id="agGo" type="submit">Ingresar</button></form>
-      <div class="ag-links"><button class="b s" data-ag="signup" type="button">Activar mi invitación</button><button class="b s" data-ag="forgot" type="button">Olvidé mi contraseña</button><button class="b s" data-ag="demo" type="button">Ver demostración sin cuenta</button></div>
-      <p class="note">¿Su empresa aún no tiene acceso? <a href="/producto">Conozca el producto y solicite una demostración</a>.</p>
+      <div class="ag-links"><button class="b s" data-ag="signup" type="button">Activar mi invitación</button><button class="b s" data-ag="forgot" type="button">Olvidé mi contraseña</button></div>
+      <p class="note">¿Su empresa aún no tiene acceso? <a href="/producto">Conozca el producto y solicite una prueba gratis</a>.</p>
       <p class="note">El acceso exige un código de una aplicación autenticadora (Google Authenticator, Microsoft Authenticator, Authy u otra). La sesión se cierra tras 30 minutos sin actividad o al cerrar la pestaña.</p>`);
     const m = ss.get('osm.msg'); if (m) { msg(m, 'info'); ss.set('osm.msg', null); }
   }
@@ -2000,6 +2071,7 @@ th.grp{text-align:center;border-bottom:2px solid var(--line);font:600 12px var(-
       ${field('agEmail', 'Correo invitado', 'email', 'autocomplete="username" required maxlength="160"')}
       ${field('agPass', 'Nueva contraseña (mínimo 12 caracteres, con letras y números)', 'password', 'autocomplete="new-password" required minlength="12" maxlength="128"')}
       ${field('agPass2', 'Repita la contraseña', 'password', 'autocomplete="new-password" required minlength="12" maxlength="128"')}
+      ${consentBox()}
       <button class="b p" id="agGo" type="submit">Crear acceso</button></form><div class="ag-links"><button class="b s" data-ag="login" type="button">Volver</button></div>`);
   }
   function vForgot() {
@@ -2070,7 +2142,17 @@ th.grp{text-align:center;border-bottom:2px solid var(--line);font:600 12px var(-
     if (verified.length) return vMfaVerify(verified[0], chooseOrg);
     return vMfaEnroll(chooseOrg);
   }
+  // Autorización de tratamiento de datos (Ley 1581 de 2012): se pide la versión vigente antes de entrar.
   async function chooseOrg() {
+    const cs = await call('/rest/v1/rpc/consent_status', { method: 'POST', body: {} }).catch(() => null);
+    if (cs && !cs.accepted) {
+      showGate(`<form id="agTerms" class="ag-form" novalidate><p>Antes de continuar, lea y acepte los documentos vigentes (versión ${esc(cs.current)}).</p>${consentBox()}
+        <button class="b p" id="agGo" type="submit">Aceptar y continuar</button></form><div class="ag-links"><button class="b s" data-ag="logout" type="button">Salir</button></div>`);
+      return;
+    }
+    return chooseOrgNext();
+  }
+  async function chooseOrgNext() {
     const rows = await call('/rest/v1/memberships?select=org_id,role,display_name,email,organizations(name)&user_id=eq.' + encodeURIComponent(sess.user.id));
     const admin = await call('/rest/v1/rpc/am_platform_admin', { method: 'POST', body: {} }).catch(() => false);
     if (!rows.length && !admin) {
@@ -2188,8 +2270,13 @@ th.grp{text-align:center;border-bottom:2px solid var(--line);font:600 12px var(-
       } else if (f.id === 'agSignup') {
         if (!strong(v('agPass'))) throw new Error('La contraseña debe tener al menos 12 caracteres, con letras y números.');
         if (v('agPass') !== v('agPass2')) throw new Error('Las contraseñas no coinciden.');
-        await call('/auth/v1/signup?redirect_to=' + encodeURIComponent(SITE), { method: 'POST', body: { email: v('agEmail').trim().toLowerCase(), password: v('agPass') }, auth: false });
+        if (!(document.getElementById('agConsent') || {}).checked) throw new Error('Para crear el acceso debe aceptar los Términos y la Política de tratamiento de datos personales.');
+        await call('/auth/v1/signup?redirect_to=' + encodeURIComponent(SITE), { method: 'POST', body: { email: v('agEmail').trim().toLowerCase(), password: v('agPass'), data: { consent_version: TERMS_V } }, auth: false });
         vLogin(); msg('Si el correo tiene invitación, recibirá un enlace de confirmación. Ábralo y luego ingrese aquí.', 'ok');
+      } else if (f.id === 'agTerms') {
+        if (!(document.getElementById('agConsent') || {}).checked) throw new Error('Marque la casilla para aceptar los documentos.');
+        await call('/rest/v1/rpc/accept_terms', { method: 'POST', body: { p_version: TERMS_V } });
+        await chooseOrgNext();
       } else if (f.id === 'agForgot') {
         await call('/auth/v1/recover?redirect_to=' + encodeURIComponent(SITE), { method: 'POST', body: { email: v('agEmail').trim().toLowerCase() }, auth: false }).catch(() => {});
         vLogin(); msg('Si el correo está registrado, recibirá un enlace para restablecer la contraseña.', 'ok');
@@ -2224,7 +2311,6 @@ th.grp{text-align:center;border-bottom:2px solid var(--line);font:600 12px var(-
     const a = b.dataset.ag;
     if (a === 'signup') vSignup(); if (a === 'forgot') vForgot(); if (a === 'login') vLogin();
     if (a === 'logout') logout();
-    if (a === 'demo') { hideGate(); window.OSM_SESSION = null; resolveReady({ demo: true }); }
     if (b.dataset.org && pendingOrgs) { const p = pendingOrgs; pendingOrgs = null; finish(p.rows.find((r) => r.org_id === b.dataset.org), p.admin, p.rows); }
   });
 
@@ -2606,7 +2692,7 @@ document.addEventListener('click',async e=>{const t=e.target.closest('button');i
 /* ---------- Productos ---------- */
 function viewProductos(){const l=Object.entries(S.cache.products);
   $('#app').innerHTML=`<div id="toasts" class="msgs"></div><section class="card"><h2>Productos</h2><div class="note">El nombre, la gravedad API y el %BSW por defecto se ofrecen al elegir el producto en un despacho.</div>
-  <div class="tw"><table><thead><tr><th class="t">Producto</th><th>API @60 °F</th><th>%BSW</th><th></th></tr></thead><tbody>${l.length?l.map(([id,p])=>`<tr><td class="t">${esc(p.name)}</td><td class="mono">${p.api??''}</td><td class="mono">${p.bsw??''}</td><td><button class="b s" data-pdel="${id}">Eliminar</button></td></tr>`).join(''):'<tr><td class="t" colspan="4">Aún no hay productos. Agregue el primero abajo o desde el despacho.</td></tr>'}</tbody></table></div>
+  <div class="tw"><table><thead><tr><th class="t">Producto</th><th>API @60 °F</th><th>%BSW</th><th></th></tr></thead><tbody>${l.length?l.map(([id,p])=>`<tr><td class="t">${esc(p.name)}</td><td class="mono">${esc(p.api??'')}</td><td class="mono">${esc(p.bsw??'')}</td><td><button class="b s" data-pdel="${esc(id)}">Eliminar</button></td></tr>`).join(''):'<tr><td class="t" colspan="4">Aún no hay productos. Agregue el primero abajo o desde el despacho.</td></tr>'}</tbody></table></div>
   <div class="row"><label class="f">Nombre<input id="pn" placeholder="Petróleo crudo"></label><label class="f">API @60 °F<input id="pa" class="n"></label><label class="f">%BSW<input id="pb" class="n"></label><button class="b p" id="padd">Guardar producto</button></div></section>`}
 document.addEventListener('click',async e=>{const t=e.target.closest('button');if(!t||tab!=='productos')return;
   if(t.id==='padd'){const n=$('#pn').value.trim();if(!n)return toast('Escriba el nombre.','warn');await put('products',slug(n),{name:n,api:num($('#pa').value)||null,bsw:num($('#pb').value)||null});await audit('GUARDAR_PRODUCTO',n,'');viewProductos()}
