@@ -36,3 +36,9 @@ for (const n of ['terminos', 'privacidad', 'cookies', 'pqrs']) {
 assert.ok(!/data-ag="demo"/.test(html), 'la pantalla de ingreso no debe ofrecer demostración sin cuenta');
 assert.ok(/consent_version/.test(html) && /accept_terms/.test(html), 'el registro debe pedir la autorización de datos');
 console.log('OK páginas legales y autorización de datos');
+
+// Librería de Excel: SheetJS 0.20.3 servida desde el sitio (sin CDN de terceros ni la 0.18.5 vulnerable).
+assert.ok(html.includes('src="vendor/xlsx-0.20.3.full.min.js"'), 'la app debe cargar SheetJS 0.20.3 local');
+assert.ok(!/cdnjs\.cloudflare\.com|xlsx\/0\.18\.5/.test(html), 'no debe quedar la SheetJS 0.18.5 del CDN');
+assert.ok(readFileSync('dist/vendor/xlsx-0.20.3.full.min.js', 'utf8').startsWith('/*! xlsx.js'), 'falta dist/vendor/xlsx-0.20.3.full.min.js');
+console.log('OK SheetJS 0.20.3 local');

@@ -46,7 +46,7 @@ const hashes = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
   .map((m) => `'sha256-${createHash('sha256').update(m[1], 'utf8').digest('base64')}'`);
 const CSP = [
   "default-src 'none'",
-  `script-src ${hashes.join(' ')} https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js`,
+  `script-src ${hashes.join(' ')} 'self'`,   // 'self': solo vendor/xlsx (SheetJS 0.20.3) servido desde este sitio
   "style-src 'unsafe-inline' https://fonts.googleapis.com",
   'font-src https://fonts.gstatic.com',
   "img-src 'self' data: blob:",
@@ -83,6 +83,9 @@ async function staticPage(src, out) {
   console.log(`dist/${out} listo (${(page.length / 1024).toFixed(0)} KB)`);
 }
 await staticPage(readFileSync('producto.html', 'utf8'), 'producto.html');
+// SheetJS 0.20.3 servido desde el propio sitio (corrige CVE-2023-30533 y CVE-2024-22363 de la 0.18.5).
+mkdirSync('dist/vendor', { recursive: true });
+writeFileSync('dist/vendor/xlsx-0.20.3.full.min.js', readFileSync('vendor/xlsx-0.20.3.full.min.js'));
 // Política de divulgación de vulnerabilidades (RFC 9116).
 mkdirSync('dist/.well-known', { recursive: true });
 writeFileSync('dist/.well-known/security.txt', readFileSync('security.txt', 'utf8'));

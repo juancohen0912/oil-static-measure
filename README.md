@@ -21,6 +21,14 @@ Resultado esperado del despacho: GOV 2 532,43 · GSV 2 428,89 · CSW 0,99650 · 
 
 Oleoducto (botón "Cargar ejemplo"): 3 puntos de entrada, 2 de salida, 4 remitentes, 4 crudos (34; 24; 16 y 12,5 °API), 2 corrientes. Mezcla Exportación: PNI 772,00 bbl (0,1499 %), API de mezcla 20,5, valor del pool 66,780303 USD/bbl, ΔV de Andina Oil +9 408,07 bbl. Mezcla Refinería: PNI 950 bbl sobre la tolerancia de 900 bbl (50 bbl los asume el transportador).
 
+## Pruebas gratis, autorización de datos y documentos legales
+
+- **Pruebas gratis** (Organización → Pruebas gratis, solo administrador de la plataforma con segundo factor): 7, 15 o 30 días calendario, con los módulos y usuarios elegidos. La función `public.admin_grant_trial` crea la organización, las licencias que vencen el último día (hora de Colombia) y la invitación como propietario, en una sola transacción; se puede prorrogar, recortar o terminar. Todo queda en `private.admin_audit`.
+- **Autorización de tratamiento de datos (Ley 1581 de 2012)**: la casilla es obligatoria al activar la invitación y la base rechaza el registro sin la versión vigente (`private.terms_version()`); quien no la haya aceptado la acepta al ingresar. Las aceptaciones quedan en `private.consents` (solo inserción). Al cambiar los documentos, suba la versión en la base y en `TERMS_V` del cliente.
+- **Documentos legales**: `legal/terminos.html`, `privacidad.html` (política de tratamiento y aviso de privacidad), `cookies.html` y `pqrs.html`, publicados en `/terminos`, `/privacidad`, `/cookies` y `/pqrs` con la plantilla `legal/_plantilla.html`.
+- **Librería de Excel**: SheetJS 0.20.3 servida desde `vendor/` (sha256 `cc015130aa8521e7f088f88898eba949ccdcbfb38df0bd129b44b7273c3a6f41`, descargada de cdn.sheetjs.com), en lugar de la 0.18.5 del CDN, vulnerable al leer archivos manipulados (CVE-2023-30533, CVE-2024-22363).
+- Migración `supabase/migrations/004_pruebas_y_autorizacion.sql` (conserva el registro abierto de Custodia IA, que comparte la base).
+
 ## Derechos de autor
 
 © 2026 Juan Cohen. Todos los derechos reservados. Software propietario: ver `LICENSE`. No se autoriza su copia, modificación ni distribución sin permiso escrito del autor.
