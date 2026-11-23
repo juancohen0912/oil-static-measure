@@ -7,7 +7,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "build": "node build.mjs",
-    "test": "node test/engine.test.mjs && node test/pipeline.test.mjs && node test/security.test.mjs"
+    "test": "node test/engine.test.mjs && node test/pipeline.test.mjs && node test/facility.test.mjs && node test/security.test.mjs"
   },
   "devDependencies": {
     "esbuild": "0.28.2"

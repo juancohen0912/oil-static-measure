@@ -215,7 +215,7 @@
   }
 
   /* ---------------- Adaptador de datos (misma interfaz que usa la app) ---------------- */
-  const APP_COLS = ['tanks', 'tabs', 'products', 'vehicles', 'ops', 'pl'];
+  const APP_COLS = ['tanks', 'tabs', 'products', 'vehicles', 'ops', 'pl', 'fac'];
   function makeDb(orgId, admin) {
     const q = encodeURIComponent;
     async function pageAll(path) {
@@ -265,7 +265,7 @@
               if (isNew) { const r = await call('/rest/v1/organizations?select=id', { method: 'POST', body, headers: { Prefer: 'return=representation' } }); oid = r[0].id; data.id = oid; }
               else await call('/rest/v1/organizations?id=eq.' + oid, { method: 'PATCH', body });
               const have = await call('/rest/v1/licenses?select=module&org_id=eq.' + oid);
-              for (const mod of ['static', 'pipeline']) {
+              for (const mod of ['static', 'pipeline', 'facility']) {
                 const on = (data.modules || []).includes(mod), exists = have.some((h) => h.module === mod);
                 if (on) await call('/rest/v1/licenses?on_conflict=org_id,module', { method: 'POST', body: { org_id: oid, module: mod, seats: Math.max(1, Number(data.seats) || 1), valid_to: data.validTo || null }, headers: { Prefer: 'resolution=merge-duplicates,return=minimal' } });
                 else if (exists) await call('/rest/v1/licenses?org_id=eq.' + oid + '&module=eq.' + mod, { method: 'DELETE' });
