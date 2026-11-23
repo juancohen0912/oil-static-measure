@@ -1713,7 +1713,7 @@ th.grp{text-align:center;border-bottom:2px solid var(--line);font:600 12px var(-
     const kp = (lab, v, cls = '', d = 'bbl NSV') => `<div class="kpi ${cls}"><span class="k">${lab}</span><span class="v">${f2(v)}</span><span class="d">${d}</span></div>`;
     const op = (s) => `<div class="op" aria-hidden="true">${s}</div>`;
     const meas = b.prod !== null && b.prod !== undefined;
-    body(msgs() + `<section class="card"><div class="row"><h3 style="margin-right:auto">Producción teórica del día</h3>${res.ok ? `<span class="chip ok">Cuadre de cierre: ${f2(b.check)}</span>` : '<span class="chip bad">Con errores</span>'}</div>
+    body(msgs() + `<section class="card"><div class="row"><h3 style="margin-right:auto">Producción teórica del día</h3><button class="b s noprint" id="facExport">Exportar Excel</button>${res.ok ? `<span class="chip ok">Cuadre de cierre: ${f2(b.check)}</span>` : '<span class="chip bad">Con errores</span>'}</div>
       <div class="fac-eq">${kp('Inventario final', b.fin)}${op('−')}${kp('Inventario inicial', b.ini)}${op('+')}${kp('Despachos', b.desp)}${op('+')}${kp('Autoconsumo', b.cons)}${op('+')}${kp('Pérdidas identificadas', b.loss)}${op('−')}${kp('Recibos de terceros', b.rec)}${op('=')}<div class="kpi res"><span class="k">Producción teórica</span><span class="v">${f2(b.teo)}</span><span class="d">bbl NSV</span></div></div>
       <div class="fac-formula">${f2(b.fin)} − ${f2(b.ini)} + ${f2(b.desp)} + ${f2(b.cons)} + ${f2(b.loss)} − ${f2(b.rec)} = ${f2(b.teo)} bbl</div></section>
       ${meas ? `<section class="card"><div class="row"><h3 style="margin-right:auto">Medido frente a teórico</h3><span class="chip ${b.inTol ? 'ok' : 'bad'}">${b.inTol ? 'Dentro de la tolerancia' : 'Fuera de la tolerancia'} (±${A.fmt(b.tol, 2)} %)</span></div>
@@ -1748,7 +1748,7 @@ th.grp{text-align:center;border-bottom:2px solid var(--line);font:600 12px var(-
     const month = (window.__facMonth || day.date.slice(0, 7));
     const days = savedDays().filter((p) => p.date.startsWith(month));
     const c = FE.consolidate(days);
-    body(`<section class="card"><div class="row"><h3 style="margin-right:auto">Balance consolidado del mes</h3><label class="f" style="min-width:180px"><span>Mes</span><input type="month" id="facMonth" value="${esc(month)}"></label></div>
+    body(`<section class="card"><div class="row"><h3 style="margin-right:auto">Balance consolidado del mes</h3><label class="f" style="min-width:180px"><span>Mes</span><input type="month" id="facMonth" value="${esc(month)}"></label>${days.length ? '<button class="b s" id="facExportMonth">Exportar Excel del mes</button>' : ''}</div>
       ${c.gaps.length ? `<div class="msg warn">Continuidad: en ${c.gaps.length} día(s) el inventario inicial no coincide con el final del día anterior (${c.gaps.map((g) => g.date + ': ' + f2(g.gap)).join(' · ')}).</div>` : days.length > 1 ? '<div class="msg ok">Continuidad: cada inventario inicial coincide con el final del día anterior.</div>' : ''}
       ${days.length ? `<div class="tw"><table><thead><tr><th class="t">Fecha</th><th class="t">Estado</th><th>Inv. inicial</th><th>Inv. final</th><th>Despachos</th><th>Autoconsumo</th><th>Recibos</th><th>Producción teórica</th><th>Medida</th><th>Diferencia</th><th>Salto de inventario</th></tr></thead><tbody>
       ${c.rows.map((r) => `<tr><td class="t mono">${esc(r.date)}</td><td class="t">${r.status === 'cerrado' ? 'Cerrado' : 'Borrador'} · r${r.rev}</td><td>${f2(r.ini)}</td><td>${f2(r.fin)}</td><td>${f2(r.desp)}</td><td>${f2(r.cons)}</td><td>${f2(r.rec)}</td><td><b>${f2(r.teo)}</b></td><td>${r.prod === null || r.prod === undefined ? '—' : f2(r.prod)}</td><td>${r.diff === null || r.diff === undefined ? '—' : f2(r.diff)}</td><td class="${r.gap ? 'neg' : ''}">${r.gap ? f2(r.gap) : '—'}</td></tr>`).join('')}
@@ -1813,6 +1813,7 @@ th.grp{text-align:center;border-bottom:2px solid var(--line);font:600 12px var(-
     if (b.id === 'facDemo') { day = { date: day.date, org: org().id, status: 'borrador', rev: day.rev, demo: true, data: normalize(Object.assign(FE.demo(), { notes: '', signers: day.data.signers })) }; dirty = true; recompute(); sub = 'balance'; return view(A); }
     if (b.id === 'facNext') return nextDay();
     if (b.id === 'facExport') return exportXlsx();
+    if (b.id === 'facExportMonth') return exportMonth();
     if (b.id === 'facPrint') { try { window.print(); } catch (err) {} }
   });
 
@@ -1841,6 +1842,7 @@ th.grp{text-align:center;border-bottom:2px solid var(--line);font:600 12px var(-
   }
 
   /* ------------------------- Excel ------------------------- */
+  const fileName = (t) => String(t).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w]+/g, '_').replace(/^_|_$/g, '');
   function exportXlsx() {
     recompute(); const X = window.XLSX; if (!X) return A.toast('No se pudo cargar la librería de Excel.', 'bad');
     const wb = X.utils.book_new(), d = day.data, b = res.bal, n = (v) => { const x = FE.num(v); return isFinite(x) ? x : ''; };
@@ -1862,8 +1864,25 @@ th.grp{text-align:center;border-bottom:2px solid var(--line);font:600 12px var(-
     X.utils.book_append_sheet(wb, simple(res.prod, ['Fuente', 'Soporte', 'NSV', 'API60', 'BSW_pct'], (r) => [r.source || '', r.ref || '', r.nsv, r.api ?? '', r.bsw ?? '']), 'Produccion_medida');
     X.utils.book_append_sheet(wb, simple(res.cons, ['Concepto', 'Soporte', 'NSV'], (r) => [r.concept || '', r.ref || '', r.nsv]), 'Autoconsumo');
     X.utils.book_append_sheet(wb, simple(res.loss, ['Evento', 'Reporte', 'NSV'], (r) => [r.concept || '', r.ref || '', r.nsv]), 'Perdidas');
-    const fn = 'Balance_' + (d.cfg.facility || org().name).replace(/[^\w]+/g, '_') + '_' + day.date + '_r' + day.rev + '.xlsx';
+    const fn = 'Balance_' + fileName(d.cfg.facility || org().name) + '_' + day.date + '_r' + day.rev + '.xlsx';
     A.audit('EXPORTAR_BALANCE_FACILIDAD', day.date, org().name + ' · ' + fn);
+    A.saveFile(fn, new Blob([X.write(wb, { type: 'array', bookType: 'xlsx' })], { type: 'application/octet-stream' }));
+  }
+
+  function exportMonth() {
+    const X = window.XLSX; if (!X) return A.toast('No se pudo cargar la librería de Excel.', 'bad');
+    const month = window.__facMonth || day.date.slice(0, 7), days = savedDays().filter((p) => p.date.startsWith(month)), c = FE.consolidate(days);
+    const h = ['Fecha', 'Estado', 'Rev', 'Inv_inicial', 'Inv_final', 'Despachos', 'Carrotanques', 'Oleoducto', 'Buque', 'Autoconsumo', 'Perdidas_identificadas', 'Recibos_terceros', 'Produccion_teorica', 'Produccion_medida', 'Diferencia', 'Salto_inventario'];
+    const B = 8; // filas 1-5 encabezado, 6 vacía, 7 títulos, datos desde la 8
+    const rows = c.rows.map((r, i) => { const x = i + B, s = (days.find((p) => p.date === r.date) || {}).summary || {}, by = s.by || {};
+      return [r.date, r.status, r.rev, r.ini, r.fin, r.desp, by.carrotanques || 0, by.oleoducto || 0, by.buque || 0, r.cons, r.loss || 0, r.rec,
+        { f: `ROUND(E${x}-D${x}+F${x}+J${x}+K${x}-L${x},2)`, v: r.teo }, r.prod ?? '', r.prod === null || r.prod === undefined ? '' : { f: `ROUND(N${x}-M${x},2)`, v: r.diff }, i ? { f: `ROUND(D${x}-E${x - 1},2)`, v: r.gap } : 0]; });
+    const n = rows.length + B - 1, sum = (col) => ({ f: `SUM(${col}${B}:${col}${n})` });
+    const tot = ['Mes', '', '', { f: `D${B}` }, { f: `E${n}` }, sum('F'), sum('G'), sum('H'), sum('I'), sum('J'), sum('K'), sum('L'), sum('M'), sum('N'), sum('O'), ''];
+    const wb = X.utils.book_new();
+    X.utils.book_append_sheet(wb, X.utils.aoa_to_sheet([['Balance consolidado', day.data.cfg.facility || ''], ['Organización', org().name], ['Mes', month], ['Días guardados', days.length], ['Días con salto de inventario', c.gaps.length], [], ...[h, ...rows, tot]]), 'Consolidado');
+    const fn = 'Balance_mensual_' + fileName(day.data.cfg.facility || org().name) + '_' + month + '.xlsx';
+    A.audit('EXPORTAR_BALANCE_MENSUAL', month, org().name + ' · ' + fn);
     A.saveFile(fn, new Blob([X.write(wb, { type: 'array', bookType: 'xlsx' })], { type: 'application/octet-stream' }));
   }
 

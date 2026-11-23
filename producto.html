@@ -9,9 +9,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Oil Static Measure · Medición estática y compensación volumétrica</title>
-<meta name="description" content="Software para medición estática de tanques (API MPMS 3, 11.1, 12.1.1), prorrateo a carrotanques y compensación volumétrica en oleoductos. Trazabilidad para auditoría, por organización y con segundo factor.">
+<meta name="description" content="Software para medición estática de tanques (API MPMS 3, 11.1, 12.1.1), balance diario de facilidades, prorrateo a carrotanques y compensación volumétrica en oleoductos. Trazabilidad para auditoría, por organización y con segundo factor.">
 <meta property="og:title" content="Oil Static Measure">
-<meta property="og:description" content="Medición estática, prorrateo a carrotanques y compensación volumétrica en oleoductos, con trazabilidad para auditoría.">
+<meta property="og:description" content="Medición estática, balance de facilidades, prorrateo a carrotanques y compensación volumétrica en oleoductos, con trazabilidad para auditoría.">
 <meta property="og:type" content="website">
 <meta name="theme-color" content="#0E5E5B">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230E5E5B'/%3E%3Cpath d='M9 7h14v18H9z' fill='none' stroke='%23fff' stroke-width='2'/%3E%3Cpath d='M9 17h14' stroke='%234FC3B5' stroke-width='2'/%3E%3C/svg%3E">
@@ -97,8 +97,9 @@ section{padding:48px 0;border-top:1px solid var(--line)}
 .steps .card{position:relative;padding-top:52px}
 .steps .card::before{counter-increment:s;content:counter(s);position:absolute;top:16px;left:22px;font:700 28px/1 var(--f-display);color:var(--accent)}
 
-.plans{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
-@media (max-width:860px){.plans{grid-template-columns:1fr}}
+.plans{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+@media (max-width:980px){.plans{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:560px){.plans{grid-template-columns:1fr}}
 .plan h3{text-transform:uppercase}
 .plan .price{font:500 15px var(--f-body);color:var(--muted);margin:4px 0 12px}
 .plan .price b{font:700 26px var(--f-display);color:var(--ink);letter-spacing:.01em}
@@ -133,9 +134,9 @@ footer{border-top:1px solid var(--line);padding:22px 0 40px;font-size:13px;color
       <div>
         <div class="kicker">Para operadoras, inspección y oleoductos</div>
         <h1>Cada barril, calculado y trazable</h1>
-        <p class="lead">Medición estática de tanques, prorrateo a carrotanques y compensación volumétrica en oleoductos, según API MPMS. Sin hojas de Excel con fórmulas rotas, con un registro que resiste una auditoría.</p>
+        <p class="lead">Medición estática de tanques, balance diario de facilidades, prorrateo a carrotanques y compensación volumétrica en oleoductos, según API MPMS. Sin hojas de Excel con fórmulas rotas, con un registro que resiste una auditoría.</p>
         <div class="ctas">
-          <a class="btn primary" href="mailto:contactocustodiaia@gmail.com?subject=Demostraci%C3%B3n%20Oil%20Static%20Measure&amp;body=Empresa%3A%0ACargo%3A%0ATel%C3%A9fono%3A%0AM%C3%B3dulo%20de%20inter%C3%A9s%20(est%C3%A1tica%20%2F%20oleoducto%20%2F%20ambos)%3A%0AN%C3%BAmero%20de%20usuarios%3A%0A">Agendar una demostración</a>
+          <a class="btn primary" href="mailto:contactocustodiaia@gmail.com?subject=Demostraci%C3%B3n%20Oil%20Static%20Measure&amp;body=Empresa%3A%0ACargo%3A%0ATel%C3%A9fono%3A%0AM%C3%B3dulo%20de%20inter%C3%A9s%20(est%C3%A1tica%20%2F%20facilidad%20%2F%20oleoducto%20%2F%20total)%3A%0AN%C3%BAmero%20de%20usuarios%3A%0A">Agendar una demostración</a>
           <a class="btn ghost" href="/">Probar la demo sin cuenta</a>
         </div>
       </div>
@@ -165,9 +166,9 @@ footer{border-top:1px solid var(--line);padding:22px 0 40px;font-size:13px;color
     </section>
 
     <section id="modulos" aria-labelledby="h-mod">
-      <h2 id="h-mod">Dos módulos, una licencia</h2>
-      <p class="intro">Contrate uno o los dos. Cada organización trabaja con sus propios tanques, tablas de aforo, crudos y períodos.</p>
-      <div class="grid g2">
+      <h2 id="h-mod">Tres módulos, una licencia</h2>
+      <p class="intro">Contrate los que necesite. Cada organización trabaja con sus propios tanques, tablas de aforo, crudos y períodos.</p>
+      <div class="grid g3">
         <article class="card module">
           <h3>Medición estática</h3>
           <div class="std"><span class="tag">API MPMS 3</span><span class="tag">11.1 · Tabla 6A/24A</span><span class="tag">12.1.1</span></div>
@@ -186,6 +187,16 @@ footer{border-top:1px solid var(--line);padding:22px 0 40px;font-size:13px;color
             <li>Pérdidas identificables y no identificables con tolerancia, y quién asume el excedente.</li>
             <li>Contracción teórica por mezcla y compensación volumétrica de suma cero por API y azufre (o valor contractual).</li>
             <li>Factor de compensación por producto, remitente y cliente, saldos over/short, e importación y exportación a Excel con fórmulas.</li>
+          </ul>
+        </article>
+        <article class="card module">
+          <h3>Balance de facilidad</h3>
+          <div class="std"><span class="tag">Balance de planta</span><span class="tag">API MPMS 3 · 11.1 · 12.1.1</span></div>
+          <ul>
+            <li>Balance diario de una estación o CPF que recibe, procesa, autoconsume y despacha a carrotanques, oleoductos y buques.</li>
+            <li>Inventario inicial y final por tanque, despachos por medición estática y por tiquete, recibos de terceros y autoconsumo.</li>
+            <li><b>Producción teórica</b> del día y diferencia frente a la producción medida, con tolerancia.</li>
+            <li>Acta de balance imprimible, consolidado mensual con control de continuidad de inventarios y exportación a Excel.</li>
           </ul>
         </article>
       </div>
@@ -215,8 +226,9 @@ footer{border-top:1px solid var(--line);padding:22px 0 40px;font-size:13px;color
       <p class="intro">Licencia anual por organización, según los módulos y el número de usuarios (3, 10 o 25, o más por cotización). Escríbanos y le enviamos la cotización.</p>
       <div class="plans">
         <div class="card plan"><h3>Estática</h3><div class="price">Desde <b>$7,2 M</b> COP/año</div><p class="muted">Medición de tanques y prorrateo a carrotanques.</p></div>
-        <div class="card plan feat"><h3>Total</h3><div class="price">Desde <b>$17,5 M</b> COP/año</div><p class="muted">Medición estática y oleoducto, en la misma organización.</p></div>
+        <div class="card plan"><h3>Facilidad</h3><div class="price">Desde <b>$12 M</b> COP/año</div><p class="muted">Balance diario de planta, acta y consolidado mensual.</p></div>
         <div class="card plan"><h3>Oleoducto</h3><div class="price">Desde <b>$15 M</b> COP/año</div><p class="muted">Balance, pérdidas y compensación volumétrica.</p></div>
+        <div class="card plan feat"><h3>Total</h3><div class="price">Desde <b>$27,5 M</b> COP/año</div><p class="muted">Los tres módulos en la misma organización.</p></div>
       </div>
       <p class="muted" style="font-size:14px;margin-top:14px">Precios de la licencia de hasta 3 usuarios, antes de IVA. Incluye la implementación de hasta 5 tanques.</p>
       <div class="ctas"><a class="btn primary" href="mailto:contactocustodiaia@gmail.com?subject=Cotizaci%C3%B3n%20Oil%20Static%20Measure&amp;body=Empresa%3A%0ANIT%3A%0AM%C3%B3dulo(s)%3A%0AN%C3%BAmero%20de%20usuarios%3A%0A">Solicitar cotización</a></div>
@@ -244,7 +256,7 @@ footer{border-top:1px solid var(--line);padding:22px 0 40px;font-size:13px;color
       <h2>Vea su propio despacho calculado</h2>
       <p class="muted">Cuéntenos qué mide y le mostramos el flujo completo con un caso parecido al suyo.</p>
       <div class="ctas">
-        <a class="btn primary" href="mailto:contactocustodiaia@gmail.com?subject=Demostraci%C3%B3n%20Oil%20Static%20Measure&amp;body=Empresa%3A%0ACargo%3A%0ATel%C3%A9fono%3A%0AM%C3%B3dulo%20de%20inter%C3%A9s%20(est%C3%A1tica%20%2F%20oleoducto%20%2F%20ambos)%3A%0AN%C3%BAmero%20de%20usuarios%3A%0A">Agendar una demostración</a>
+        <a class="btn primary" href="mailto:contactocustodiaia@gmail.com?subject=Demostraci%C3%B3n%20Oil%20Static%20Measure&amp;body=Empresa%3A%0ACargo%3A%0ATel%C3%A9fono%3A%0AM%C3%B3dulo%20de%20inter%C3%A9s%20(est%C3%A1tica%20%2F%20facilidad%20%2F%20oleoducto%20%2F%20total)%3A%0AN%C3%BAmero%20de%20usuarios%3A%0A">Agendar una demostración</a>
         <a class="btn ghost" href="/">Probar la demo sin cuenta</a>
       </div>
     </div>
